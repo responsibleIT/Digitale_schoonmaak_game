@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dashboardgame – Host</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <main class="container">
+    <h1>Host Dashboard</h1>
+
+    <div class="card">
+      <div class="stack">
+        <button id="start" class="primary">Start sessie</button>
+
+        <div id="sessionBox" class="hidden">
+          <h2>Sessie ID: <span id="sessionId"></span></h2>
+          <p class="muted">Laat spelers dit ID invullen op het join-scherm.</p>
+
+          <section class="stats">
+            <h3>Leaderboard</h3>
+            <ol id="leaderboard"></ol>
+            <p id="totals" class="muted"></p>
+          </section>
+
+          <div class="row gap">
+            <button id="refreshStats" class="secondary">Vernieuw stats</button>
+            <button id="end" class="danger">Beëindig sessie</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script type="module" src="/js/socket.js"></script>
+  <script type="module">
+    import { socket } from "/js/socket.js";
+    const $ = (sel) => document.querySelector(sel);
+
+    const startBtn = $("#start");
+    const endBtn = $("#end");
+    const refreshBtn = $("#refreshStats");
+    const sessionBox = $("#sessionBox");
+    const sessionIdSpan = $("#sessionId");
+    const leaderboard = $("#leaderboard");
+    const totals = $("#totals");
+
+    let sessionId;
+
+    startBtn.addEventListener("click", () => socket.emit("host:start"));
+    endBtn?.addEventListener("click", () => {
+      if (sessionId) socket.emit("host:end", { sessionId });
+    });
+    refreshBtn?.addEventListener("click", () => {
+      if (sessionId) socket.emit("host:requestStats", { sessionId });
+    });
+
+    socket.on("host:sessionId", (p) => {
+      sessionId = p.sessionId;
+      sessionIdSpan.textContent = sessionId;
+      sessionBox.classList.remove("hidden");
+    });
+
+    socket.on("stats", (snap) => {
+      leaderboard.innerHTML = snap.leaderboard
+        .map((l) => `<li><strong>${l.displayName}</strong> — ${(l.bytes/1_000_000).toFixed(2)} MB (${l.items} items)</li>`)
+        .join("");
+      totals.textContent = `Totaal: ${(snap.totalBytes/1_000_000).toFixed(2)} MB over ${snap.totalItems} items.`;
+    });
+
+    socket.on("session:ended", () => {
+      alert("Sessie beëindigd.");
+      sessionBox.classList.add("hidden");
+      sessionId = undefined;
+    });
+  </script>
+</body>
+</html>

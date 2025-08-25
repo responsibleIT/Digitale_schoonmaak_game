@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dashboardgame – Speler</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <main class="container">
+    <h1>Speler</h1>
+
+    <div class="card">
+      <div class="row gap wrap">
+        <div class="muted">Sleep een bestand naar het monster om het te (prullenbak) verwijderen.</div>
+        <a href="/" class="secondary">Terug naar join</a>
+      </div>
+
+      <div id="files" class="file-grid"></div>
+      <div id="monster" class="monster" tabindex="0" title="Sleep hierheen">🧟‍♂️ Drop hier</div>
+    </div>
+  </main>
+
+  <script type="module">
+    import { getQuery } from "/js/ui.js";
+    import { apiListFiles, apiDelete } from "/js/api.js";
+
+    const { sessionId, userId } = getQuery();
+    const filesDiv = document.getElementById("files");
+    const monster = document.getElementById("monster");
+
+    function renderFiles(items) {
+      filesDiv.innerHTML = items.map((f) => `
+        <div class="file" draggable="true" data-id="${f.id}" data-name="${f.name}" data-size="${f.size}">
+          <div class="file-name">${f.name}</div>
+          <div class="file-size">${(f.size/1_000_000).toFixed(2)} MB</div>
+        </div>
+      `).join("");
+
+      filesDiv.querySelectorAll(".file").forEach((el) => {
+        el.addEventListener("dragstart", (e) => {
+          e.dataTransfer.setData("text/plain", JSON.stringify({
+            id: el.dataset.id,
+            name: el.dataset.name,
+            size: Number(el.dataset.size),
+          }));
+        });
+      });
+    }
+
+    // Drag target
+    monster.addEventListener("dragover", (e) => e.preventDefault());
+    monster.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      try {
+        const data = JSON.parse(e.dataTransfer.getData("text/plain"));
+        await apiDelete({
+          sessionId,
+          userId,
+          itemId: data.id,
+          itemName: data.name,
+          size: data.size
+        });
+        const el = filesDiv.querySelector(`[data-id="${data.id}"]`);
+        if (el) el.remove();
+      } catch (err) {
+        alert("Kon het bestand niet verwijderen. Probeer opnieuw.");
+        console.error(err);
+      }
+    });
+
+    // Initial load
+    try {
+      const res = await apiListFiles({ sessionId, userId });
+      renderFiles(res.files ?? []);
+    } catch (err) {
+      filesDiv.innerHTML = `<p class="error">Kon bestanden niet laden. Is je sessie nog actief?</p>`;
+      console.error(err);
+    }
+  </script>
+</body>
+</html>
