@@ -1,19 +1,6 @@
 // src/services/graphClient.ts
-
-/**
- * SKELETON GraphClient:
- * - Nu: mock-implementatie (werkt zonder Microsoft Graph).
- * - Later: vervang door echte Graph-calls met het user access token (MSAL).
- *
- * Voor echte Graph:
- *   npm i @microsoft/microsoft-graph-client isomorphic-fetch
- *   (en voeg `import "isomorphic-fetch";` eenmalig toe in je server bootstrap)
- *
- * Endpoints (delegated):
- *   - List OneDrive:   GET  /me/drive/root/children
- *   - Delete item:     DELETE /me/drive/items/{item-id}
- *   - SharePoint:      /sites/{site-id}/drive/root/children  (of via /me/followedSites)
- */
+import "isomorphic-fetch"; // required once in your app for the Graph SDK
+import { Client } from "@microsoft/microsoft-graph-client";
 
 export interface DriveItem {
   id: string;
@@ -23,40 +10,79 @@ export interface DriveItem {
 }
 
 export class GraphClient {
-  constructor(private accessToken?: string) {}
+  private client: Client;
 
-  /**
-   * Haal bestanden van de gebruiker op (mock).
-   * Vervang dit door een echte Graph-call.
-   */
-  async listUserDrive(): Promise<DriveItem[]> {
-    // TODO: ECHT:
-    // const client = Client.init({
-    //   authProvider: (done) => done(null, this.accessToken ?? ""),
-    // });
-    // const res = await client.api("/me/drive/root/children").get();
-    // return (res.value ?? []).map((it: any) => ({
-    //   id: it.id, name: it.name, size: it.size ?? 0, isFolder: it.folder != null
-    // }));
-
-    // MOCK:
-    return [
-      { id: "1", name: "rapport.docx", size: 120_000 },
-      { id: "2", name: "dataset.csv", size: 5_000_000 },
-      { id: "3", name: "screenshot.png", size: 800_000 },
-    ];
+  constructor(accessToken?: string) {
+    if (!accessToken) {
+      throw new Error("GraphClient requires a delegated access token");
+    }
+    this.client = Client.init({
+      authProvider: (done) => {
+        done(null, accessToken);
+      },
+    });
   }
 
   /**
-   * Verplaats een item naar de prullenbak (mock).
-   * In Graph is dit een DELETE op het drive item.
+   * List files in the user's OneDrive root.
+   * You can also navigate into folders by calling `/me/drive/items/{id}/children`.
+   */
+  async listUserDrive(): Promise<DriveItem[]> {
+    const res = await this.client
+      .api("/me/drive/root/children")
+      .select("id,name,size,folder")
+      .top(50)
+      .get();
+
+    const items = (res.value ?? []) as Array<any>;
+    return items.map((it) => ({
+      id: it.id,
+      name: it.name,
+      size: it.size ?? 0,
+      isFolder: !!it.folder,
+    }));
+  }
+
+  /**
+   * Delete a file (moves to recycle bin).
    */
   async deleteItem(itemId: string): Promise<void> {
-    // TODO: ECHT:
-    // const client = Client.init({
-    //   authProvider: (done) => done(null, this.accessToken ?? ""),
-    // });
-    // await client.api(`/me/drive/items/${itemId}`).delete();
-    return;
+    await this.client.api(`/me/drive/items/${itemId}`).delete();
+  }
+
+  // --- Optional helpers for later ---
+
+  /** List children of a folder by id */
+  async listChildren(itemId: string): Promise<DriveItem[]> {
+    const res = await this.client
+      .api(`/me/drive/items/${itemId}/children`)
+      .select("id,name,size,folder")
+      .top(50)
+      .get();
+
+    const items = (res.value ?? []) as Array<any>;
+    return items.map((it) => ({
+      id: it.id,
+      name: it.name,
+      size: it.size ?? 0,
+      isFolder: !!it.folder,
+    }));
+  }
+
+  /** SharePoint example: list a site's drive root */
+  async listSharePointSiteDrive(siteId: string): Promise<DriveItem[]> {
+    const res = await this.client
+      .api(`/sites/${siteId}/drive/root/children`)
+      .select("id,name,size,folder")
+      .top(50)
+      .get();
+
+    const items = (res.value ?? []) as Array<any>;
+    return items.map((it) => ({
+      id: it.id,
+      name: it.name,
+      size: it.size ?? 0,
+      isFolder: !!it.folder,
+    }));
   }
 }
