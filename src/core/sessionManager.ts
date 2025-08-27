@@ -16,10 +16,20 @@ export class SessionManager {
       hostSocketId,
       startedAt: Date.now(),
       users: new Map<UserId, User>(),
+      phase: "lobby",               // ← NEW: start in lobby
     };
+    
     this.sessions.set(id, session);
     log.info("Session created", id);
     return session;
+  }
+
+  //Start session
+  start(sessionId: SessionId): Session {
+    const s = this.sessions.get(sessionId);
+    if (!s) throw new Error("Session not found");
+    s.phase = "started";
+    return s;
   }
 
   /**
@@ -64,9 +74,10 @@ export class SessionManager {
     const s = this.sessions.get(sessionId);
     if (!s) return;
     s.endedAt = Date.now();
+    s.phase = "ended";            // ← track phase
     this.sessions.delete(sessionId);
     log.info("Session ended", sessionId);
-  }
+  } 
 
   get(sessionId: SessionId): Session | undefined {
     return this.sessions.get(sessionId);

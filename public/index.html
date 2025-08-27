@@ -40,7 +40,6 @@
   <script type="module" src="/js/msal-init.js"></script>
   <script type="module">
     import { apiJoin } from "/js/api.js";
-    import { socket } from "/js/socket.js";
 
     const $ = (sel) => document.querySelector(sel);
     const form = $("#join-form");
@@ -61,7 +60,7 @@
       await apiJoin({ sessionId, userId, displayName, accessToken });
 
       // Laat socket de room joinen voor realtime events
-      socket.emit("client:join", { sessionId, userId, displayName, accessToken });
+      // socket.emit("client:join", { sessionId, userId, displayName, accessToken });
 
       // Ga naar game
       const q = new URLSearchParams({ sessionId, userId, displayName });

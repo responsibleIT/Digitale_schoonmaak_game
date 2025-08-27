@@ -2,6 +2,8 @@
 
 export type SessionId = string;
 export type UserId = string;
+export type SessionPhase = "lobby" | "started" | "ended";
+
 
 export interface User {
   id: UserId;
@@ -12,12 +14,14 @@ export interface User {
   largestItemDeleted?: { id: string; name: string; size: number };
 }
 
+// extend Session
 export interface Session {
   id: SessionId;
   hostSocketId: string;
   startedAt: number;
   users: Map<UserId, User>;
   endedAt?: number;
+  phase: SessionPhase;          // ← NEW
 }
 
 export interface StatsSnapshot {

@@ -9,25 +9,63 @@
 <body>
   <main class="container">
     <h1>Speler</h1>
-
     <div class="card">
-      <div class="row gap wrap">
-        <div class="muted">Sleep een bestand naar het monster om het te (prullenbak) verwijderen.</div>
-        <a href="/" class="secondary">Terug naar join</a>
+      <div id="lobby">
+        <h2>Lobby</h2>
+        <p class="muted">Wachten tot de host het spel start…</p>
+        <ul id="lobbyUsers"></ul>
       </div>
 
-      <div id="files" class="file-grid"></div>
-      <div id="monster" class="monster" tabindex="0" title="Sleep hierheen">🧟‍♂️ Drop hier</div>
+      <div id="gameUI" class="hidden">
+        <div class="row gap wrap">
+          <div class="muted">Sleep een bestand naar het monster om te verwijderen.</div>
+          <a href="/" class="secondary">Terug naar join</a>
+        </div>
+        <div id="files" class="file-grid"></div>
+        <div id="monster" class="monster" tabindex="0" title="Sleep hierheen">🧟‍♂️ Drop hier</div>
+      </div>
     </div>
   </main>
 
   <script type="module">
     import { getQuery } from "/js/ui.js";
     import { apiListFiles, apiDelete } from "/js/api.js";
+    import { socket, connectSocket } from "/js/socket.js";
 
-    const { sessionId, userId } = getQuery();
+    const { sessionId, userId, displayName } = getQuery();
+    const lobby = document.getElementById("lobby");
+    const lobbyUsers = document.getElementById("lobbyUsers");
+    const gameUI = document.getElementById("gameUI");
     const filesDiv = document.getElementById("files");
     const monster = document.getElementById("monster");
+
+    connectSocket();
+    socket.emit("client:join", { sessionId, userId, displayName });
+
+    function renderLobby(users = []) {
+      lobbyUsers.innerHTML = users.map(u => `<li>${u.displayName}</li>`).join("");
+    }
+
+    socket.on("presence", ({ users, phase }) => {
+      renderLobby(users);
+      if (phase === "started") startGame();
+    });
+
+    socket.on("game:started", () => startGame());
+
+    async function startGame() {
+      if (!lobby.classList.contains("hidden")) {
+        lobby.classList.add("hidden");
+        gameUI.classList.remove("hidden");
+        try {
+          const res = await apiListFiles({ sessionId, userId }); // returns dummy files now
+          renderFiles(res.files ?? []);
+        } catch (err) {
+          filesDiv.innerHTML = `<p class="error">Kon bestanden niet laden (is de sessie actief?).</p>`;
+          console.error(err);
+        }
+      }
+    }
 
     function renderFiles(items) {
       filesDiv.innerHTML = items.map((f) => `
@@ -54,13 +92,7 @@
       e.preventDefault();
       try {
         const data = JSON.parse(e.dataTransfer.getData("text/plain"));
-        await apiDelete({
-          sessionId,
-          userId,
-          itemId: data.id,
-          itemName: data.name,
-          size: data.size
-        });
+        await apiDelete({ sessionId, userId, itemId: data.id, itemName: data.name, size: data.size });
         const el = filesDiv.querySelector(`[data-id="${data.id}"]`);
         if (el) el.remove();
       } catch (err) {
@@ -68,15 +100,6 @@
         console.error(err);
       }
     });
-
-    // Initial load
-    try {
-      const res = await apiListFiles({ sessionId, userId });
-      renderFiles(res.files ?? []);
-    } catch (err) {
-      filesDiv.innerHTML = `<p class="error">Kon bestanden niet laden. Is je sessie nog actief?</p>`;
-      console.error(err);
-    }
   </script>
 </body>
 </html>

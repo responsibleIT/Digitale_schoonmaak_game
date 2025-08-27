@@ -15,7 +15,7 @@
         <button id="start" class="primary">Start sessie</button>
 
         <div id="sessionBox" class="hidden">
-          <h2>Sessie ID: <span id="sessionId"></span></h2>
+          <h2>Sessie ID: <span id="sessionIdSpan"></span></h2>
           <p class="muted">Laat spelers dit ID invullen op het join-scherm.</p>
 
           <section class="stats">
@@ -25,22 +25,26 @@
           </section>
 
           <div class="row gap">
-            <button id="refreshStats" class="secondary">Vernieuw stats</button>
-            <button id="end" class="danger">Beëindig sessie</button>
-          </div>
+          <button id="begin" class="primary">Start het spel</button>
+          <button id="refreshStats" class="secondary">Vernieuw stats</button>
+          <button id="end" class="danger">Beëindig sessie</button>
+        </div>
         </div>
       </div>
     </div>
   </main>
 
-  <script type="module" src="/js/socket.js"></script>
   <script type="module">
-    import { socket } from "/js/socket.js";
-    const $ = (sel) => document.querySelector(sel);
+    import { socket, connectSocket } from "/js/socket.js";
+    connectSocket();
+
+    const $ = (s) => document.querySelector(s);
 
     const startBtn = $("#start");
+    const beginBtn = $("#begin");
     const endBtn = $("#end");
     const refreshBtn = $("#refreshStats");
+
     const sessionBox = $("#sessionBox");
     const sessionIdSpan = $("#sessionId");
     const leaderboard = $("#leaderboard");
@@ -49,9 +53,15 @@
     let sessionId;
 
     startBtn.addEventListener("click", () => socket.emit("host:start"));
+
+    beginBtn?.addEventListener("click", () => {
+      if (sessionId) socket.emit("host:begin", { sessionId });
+    });
+
     endBtn?.addEventListener("click", () => {
       if (sessionId) socket.emit("host:end", { sessionId });
     });
+
     refreshBtn?.addEventListener("click", () => {
       if (sessionId) socket.emit("host:requestStats", { sessionId });
     });
@@ -60,6 +70,12 @@
       sessionId = p.sessionId;
       sessionIdSpan.textContent = sessionId;
       sessionBox.classList.remove("hidden");
+    });
+
+    // When the game starts, the host page becomes the live-stats board
+    socket.on("game:started", () => {
+      // nothing special needed; we already render stats on 'stats' events
+      // you could show a banner or play a sound here
     });
 
     socket.on("stats", (snap) => {

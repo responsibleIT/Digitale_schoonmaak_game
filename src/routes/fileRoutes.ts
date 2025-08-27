@@ -24,10 +24,15 @@ export function buildFileRoutes(
       sessionId: String(req.query.sessionId ?? ""),
       userId: String(req.query.userId ?? ""),
     });
+    
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
     const session = sessions.get(parsed.data.sessionId);
     if (!session) return res.status(404).json({ error: "Session not found" });
+
+    if (session.phase !== "started") {
+      return res.status(403).json({ error: "Game not started yet" });
+    }
 
     const user = session.users.get(parsed.data.userId);
     if (!user) return res.status(404).json({ error: "User not in session" });
@@ -54,6 +59,10 @@ export function buildFileRoutes(
     const { sessionId, userId, itemId, itemName, size } = parsed.data;
     const session = sessions.get(sessionId);
     if (!session) return res.status(404).json({ error: "Session not found" });
+
+    if (session.phase !== "started") {
+      return res.status(403).json({ error: "Game not started yet" });
+    }
 
     const user = session.users.get(userId);
     if (!user) return res.status(404).json({ error: "User not in session" });

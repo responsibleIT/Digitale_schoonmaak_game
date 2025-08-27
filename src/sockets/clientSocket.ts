@@ -23,11 +23,9 @@ export function registerClientSocket(
 
         // Stuur lijst van huidige users naar iedereen in de sessie
         io.to(`session:${sessionId}`).emit("presence", {
-          users: Array.from(s.users.values()).map((u) => ({
-            id: u.id,
-            displayName: u.displayName,
-          })),
-        });
+        users: Array.from(s.users.values()).map((u) => ({ id: u.id, displayName: u.displayName })),
+        phase: s.phase,  // include phase for clients
+      });
 
         // Nieuwe client krijgt meteen stats
         socket.emit("stats", stats.snapshot(s));
