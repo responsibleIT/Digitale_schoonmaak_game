@@ -14,82 +14,109 @@
       <div class="stack">
         <button id="start" class="primary">Start sessie</button>
 
+        <!-- Session box shown after host:start -->
         <div id="sessionBox" class="hidden">
-          <h2>Sessie ID: <span id="sessionIdSpan"></span></h2>
+          <h2>Sessie ID: <span id="sessionId"></span></h2>
           <p class="muted">Laat spelers dit ID invullen op het join-scherm.</p>
+
+          <section class="card" style="background: transparent; border-color: var(--border);">
+            <h3>Lobby</h3>
+            <p class="muted">Deelnemers die zijn aangesloten:</p>
+            <ul id="hostLobbyUsers"></ul>
+          </section>
+
+          <div class="row gap">
+            <button id="begin" class="primary">Start het spel</button>
+            <button id="refreshStats" class="secondary">Vernieuw stats</button>
+            <button id="end" class="danger">Beëindig sessie</button>
+          </div>
 
           <section class="stats">
             <h3>Leaderboard</h3>
             <ol id="leaderboard"></ol>
             <p id="totals" class="muted"></p>
           </section>
-
-          <div class="row gap">
-          <button id="begin" class="primary">Start het spel</button>
-          <button id="refreshStats" class="secondary">Vernieuw stats</button>
-          <button id="end" class="danger">Beëindig sessie</button>
-        </div>
         </div>
       </div>
     </div>
   </main>
 
+  <script type="module" src="/js/socket.js"></script>
   <script type="module">
     import { socket, connectSocket } from "/js/socket.js";
     connectSocket();
 
     const $ = (s) => document.querySelector(s);
-
-    const startBtn = $("#start");
-    const beginBtn = $("#begin");
-    const endBtn = $("#end");
-    const refreshBtn = $("#refreshStats");
-
-    const sessionBox = $("#sessionBox");
-    const sessionIdSpan = $("#sessionId");
-    const leaderboard = $("#leaderboard");
-    const totals = $("#totals");
+    const startBtn     = $("#start");
+    const sessionBox   = $("#sessionBox");
+    const sessionIdEl  = $("#sessionId");         // must exist
+    const beginBtn     = $("#begin");
+    const refreshBtn   = $("#refreshStats");
+    const endBtn       = $("#end");
+    const lobbyList    = $("#hostLobbyUsers");
+    const leaderboard  = $("#leaderboard");
+    const totals       = $("#totals");
 
     let sessionId;
 
-    startBtn.addEventListener("click", () => socket.emit("host:start"));
+    // Helpers with guards to avoid null errors
+    function setSessionId(id) {
+      if (sessionIdEl) sessionIdEl.textContent = id;
+      if (sessionBox) sessionBox.classList.remove("hidden");
+    }
+    function renderLobby(users = []) {
+      if (!lobbyList) return;
+      lobbyList.innerHTML = users.map(u => `<li>${u.displayName}</li>`).join("");
+    }
+    function renderStats(snap) {
+      if (leaderboard) {
+        leaderboard.innerHTML = snap.leaderboard
+          .map(l => `<li><strong>${l.displayName}</strong> — ${(l.bytes/1_000_000).toFixed(2)} MB (${l.items} items)</li>`)
+          .join("");
+      }
+      if (totals) {
+        totals.textContent = `Totaal: ${(snap.totalBytes/1_000_000).toFixed(2)} MB over ${snap.totalItems} items.`;
+      }
+    }
 
-    beginBtn?.addEventListener("click", () => {
-      if (sessionId) socket.emit("host:begin", { sessionId });
-    });
+    // Buttons
+    startBtn?.addEventListener("click", () => socket.emit("host:start"));
+    beginBtn?.addEventListener("click", () => { if (sessionId) socket.emit("host:begin", { sessionId }); });
+    refreshBtn?.addEventListener("click", () => { if (sessionId) socket.emit("host:requestStats", { sessionId }); });
+    endBtn?.addEventListener("click", () => { if (sessionId) socket.emit("host:end", { sessionId }); });
 
-    endBtn?.addEventListener("click", () => {
-      if (sessionId) socket.emit("host:end", { sessionId });
-    });
-
-    refreshBtn?.addEventListener("click", () => {
-      if (sessionId) socket.emit("host:requestStats", { sessionId });
-    });
-
+    // Socket events
     socket.on("host:sessionId", (p) => {
       sessionId = p.sessionId;
-      sessionIdSpan.textContent = sessionId;
-      sessionBox.classList.remove("hidden");
+      setSessionId(sessionId);
+      socket.emit("presence:request", { sessionId });
     });
 
-    // When the game starts, the host page becomes the live-stats board
+    socket.on("presence", ({ users, phase }) => {
+      console.log("[host] presence", users, phase);
+      document.getElementById("hostLobbyUsers").innerHTML =
+        (users ?? []).map(u => `<li>${u.displayName}</li>`).join("");
+    });
+
     socket.on("game:started", () => {
-      // nothing special needed; we already render stats on 'stats' events
-      // you could show a banner or play a sound here
+      console.log("[host] game:started");
+      // host already shows stats area; no extra UI change needed
     });
 
     socket.on("stats", (snap) => {
-      leaderboard.innerHTML = snap.leaderboard
-        .map((l) => `<li><strong>${l.displayName}</strong> — ${(l.bytes/1_000_000).toFixed(2)} MB (${l.items} items)</li>`)
-        .join("");
-      totals.textContent = `Totaal: ${(snap.totalBytes/1_000_000).toFixed(2)} MB over ${snap.totalItems} items.`;
+      console.log("[host] stats", snap);
+      renderStats(snap);
     });
 
     socket.on("session:ended", () => {
       alert("Sessie beëindigd.");
-      sessionBox.classList.add("hidden");
       sessionId = undefined;
+      if (sessionBox) sessionBox.classList.add("hidden");
+      renderLobby([]);
+      renderStats({ leaderboard:[], totalBytes:0, totalItems:0 });
     });
+
+    socket.on("error", (e) => console.error("[host] error", e));
   </script>
 </body>
 </html>

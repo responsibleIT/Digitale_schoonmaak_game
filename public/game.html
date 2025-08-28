@@ -26,44 +26,60 @@
       </div>
     </div>
   </main>
-
   <script type="module">
     import { getQuery } from "/js/ui.js";
     import { apiListFiles, apiDelete } from "/js/api.js";
     import { socket, connectSocket } from "/js/socket.js";
 
     const { sessionId, userId, displayName } = getQuery();
+
     const lobby = document.getElementById("lobby");
     const lobbyUsers = document.getElementById("lobbyUsers");
     const gameUI = document.getElementById("gameUI");
     const filesDiv = document.getElementById("files");
     const monster = document.getElementById("monster");
 
+    // 1) connect socket
     connectSocket();
-    socket.emit("client:join", { sessionId, userId, displayName });
 
-    function renderLobby(users = []) {
-      lobbyUsers.innerHTML = users.map(u => `<li>${u.displayName}</li>`).join("");
+    function emitJoin() {
+      const payload = { sessionId, userId, displayName };
+      console.log("[game] emitting client:join", payload);
+      socket.emit("client:join", payload);
     }
 
+    if (socket.connected) {
+      emitJoin();
+    } else {
+      socket.once("connect", () => {
+        console.log("[game] connected");
+        emitJoin();
+      });
+    }
+
+    // Ask for snapshot in case the first presence was missed
+    socket.emit("presence:request", { sessionId });
+
+    socket.on("client:joined", (p) => console.log("[game] client:joined ack", p));
     socket.on("presence", ({ users, phase }) => {
-      renderLobby(users);
+      console.log("[game] presence", users, phase);
+      document.getElementById("lobbyUsers").innerHTML =
+        (users ?? []).map(u => `<li>${u.displayName}</li>`).join("");
       if (phase === "started") startGame();
     });
 
     socket.on("game:started", () => startGame());
 
     async function startGame() {
-      if (!lobby.classList.contains("hidden")) {
-        lobby.classList.add("hidden");
-        gameUI.classList.remove("hidden");
-        try {
-          const res = await apiListFiles({ sessionId, userId }); // returns dummy files now
-          renderFiles(res.files ?? []);
-        } catch (err) {
-          filesDiv.innerHTML = `<p class="error">Kon bestanden niet laden (is de sessie actief?).</p>`;
-          console.error(err);
-        }
+      if (!gameUI.classList.contains("hidden")) return; // already started
+      lobby.classList.add("hidden");
+      gameUI.classList.remove("hidden");
+      try {
+        const res = await apiListFiles({ sessionId, userId }); // will 403 if not started
+        renderFiles(res.files ?? []);
+      } catch (err) {
+        filesDiv.innerHTML = `<p class="error">Kon bestanden niet laden.</p>`;
+        console.error(err);
       }
     }
 
@@ -78,15 +94,12 @@
       filesDiv.querySelectorAll(".file").forEach((el) => {
         el.addEventListener("dragstart", (e) => {
           e.dataTransfer.setData("text/plain", JSON.stringify({
-            id: el.dataset.id,
-            name: el.dataset.name,
-            size: Number(el.dataset.size),
+            id: el.dataset.id, name: el.dataset.name, size: Number(el.dataset.size),
           }));
         });
       });
     }
 
-    // Drag target
     monster.addEventListener("dragover", (e) => e.preventDefault());
     monster.addEventListener("drop", async (e) => {
       e.preventDefault();

@@ -22,12 +22,11 @@
           <input id="displayName" placeholder="Naam" required />
         </label>
 
-        <div class="hint">
-          (Optioneel) Inloggen met Microsoft kan hier, of later:
-        </div>
+        <div class="hint">(Optioneel) Inloggen met Microsoft kan hier, of later:</div>
         <button type="button" id="msalLogin" class="secondary">Log in met Microsoft</button>
 
         <button type="submit" class="primary">Join</button>
+        <p id="err" class="error"></p>
       </form>
 
       <p class="muted">
@@ -36,7 +35,8 @@
     </div>
   </main>
 
-  <script type="module" src="/js/socket.js"></script>
+  <!-- You can remove socket.js here if you like; we don't use it on this page -->
+  <!-- <script type="module" src="/js/socket.js"></script> -->
   <script type="module" src="/js/msal-init.js"></script>
   <script type="module">
     import { apiJoin } from "/js/api.js";
@@ -44,31 +44,31 @@
     const $ = (sel) => document.querySelector(sel);
     const form = $("#join-form");
     const msalBtn = $("#msalLogin");
+    const errEl = $("#err");
 
     let accessToken; // wordt gezet door MSAL (optioneel)
-
-    // Placeholder: MSAL-init kan een globale setter exposen
     window.__setMsalAccessToken = (t) => (accessToken = t);
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
-      const sessionId = $("#sessionId").value.trim();
+      errEl.textContent = "";
+
+      // Normalize ID: trim + uppercase to match server codes like "9B4563"
+      const sessionId = $("#sessionId").value.trim().toUpperCase();
       const displayName = $("#displayName").value.trim();
       const userId = crypto.randomUUID();
 
-      // Meld aan bij server (registreer speler in sessie)
-      await apiJoin({ sessionId, userId, displayName, accessToken });
-
-      // Laat socket de room joinen voor realtime events
-      // socket.emit("client:join", { sessionId, userId, displayName, accessToken });
-
-      // Ga naar game
-      const q = new URLSearchParams({ sessionId, userId, displayName });
-      window.location.href = `/game.html?${q.toString()}`;
+      try {
+        await apiJoin({ sessionId, userId, displayName, accessToken });
+        const q = new URLSearchParams({ sessionId, userId, displayName });
+        window.location.href = `/game.html?${q.toString()}`;
+      } catch (err) {
+        console.error(err);
+        errEl.textContent = "Kon niet joinen. Klopt het sessie-ID?";
+      }
     });
 
     msalBtn.addEventListener("click", async () => {
-      // Wordt ingevuld zodra we msal-init.js schrijven
       if (window.__msalLogin) {
         accessToken = await window.__msalLogin();
       } else {

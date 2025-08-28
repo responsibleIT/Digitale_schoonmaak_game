@@ -15,7 +15,6 @@ export function registerHostSocket(
     const s = sessions.create(socket.id);
     socket.join(`session:${s.id}`);
     socket.emit("host:sessionId", { sessionId: s.id });
-    log.info("Host started session", s.id);
   });
 
   // BEGIN the game: set phase=started, notify everyone, push initial stats
