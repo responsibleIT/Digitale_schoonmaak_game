@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Dashboardgame – Speler</title>
   <link rel="stylesheet" href="/css/style.css" />
+  <script type="module" src="/js/google-init.js"></script>
 </head>
 <body>
   <main class="container">
@@ -26,20 +27,81 @@
       </div>
     </div>
   </main>
+
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script>
+    // set once (or inject from server)
+    window.__GOOGLE_CLIENT_ID = "752962192093-r6fkli0tcuh8lbfgrn16fldnub4jvvem.apps.googleusercontent.com";
+  </script>
+
   <script type="module">
-    import { getQuery } from "/js/ui.js";
-    import { apiListFiles, apiDelete } from "/js/api.js";
+    import { initGoogle, loginAndGetToken } from "/js/google-init.js";
+    import { apiListFiles, apiDelete, apiAttachToken } from "/js/api.js";
     import { socket, connectSocket } from "/js/socket.js";
+    import { getQuery } from "/js/ui.js";
+
+    // --- Init Google on THIS page (important) ---
+    initGoogle(window.__GOOGLE_CLIENT_ID);
 
     const { sessionId, userId, displayName } = getQuery();
 
-    const lobby = document.getElementById("lobby");
+    const lobby      = document.getElementById("lobby");
     const lobbyUsers = document.getElementById("lobbyUsers");
-    const gameUI = document.getElementById("gameUI");
-    const filesDiv = document.getElementById("files");
-    const monster = document.getElementById("monster");
+    const gameUI     = document.getElementById("gameUI");
+    const filesDiv   = document.getElementById("files");
+    const monster    = document.getElementById("monster");
 
-    // 1) connect socket
+    // Render first so it's in scope
+    function renderFiles(items) {
+      filesDiv.innerHTML = (items ?? []).map((f) => {
+        const canTrash = f.canTrash !== false; // default true if missing
+        const classes = ["file", !canTrash ? "disabled" : ""].join(" ").trim();
+        const title = canTrash ? "" : "You don’t have permission to trash this file";
+        return `
+          <div class="${classes}" ${canTrash ? 'draggable="true"' : ""} title="${title}"
+              data-id="${f.id}" data-name="${f.name}" data-size="${f.size}">
+            <div class="file-name">${f.name}</div>
+            <div class="file-size">${(Number(f.size)/1_000_000).toFixed(2)} MB</div>
+            ${!canTrash ? '<div class="lock">🔒</div>' : ''}
+          </div>
+        `;
+      }).join("");
+
+      filesDiv.querySelectorAll('.file[draggable="true"]').forEach((el) => {
+        el.addEventListener("dragstart", (e) => {
+          e.dataTransfer.setData("text/plain", JSON.stringify({
+            id: el.dataset.id,
+            name: el.dataset.name,
+            size: Number(el.dataset.size),
+          }));
+        });
+      });
+    }
+
+    async function startGame() {
+      if (!gameUI.classList.contains("hidden")) return;
+      lobby.classList.add("hidden");
+      gameUI.classList.remove("hidden");
+
+      try {
+        const res = await apiListFiles({ sessionId, userId });
+        renderFiles(res.files ?? []);
+      } catch (err) {
+        console.warn("[game] list failed, trying Google login", err);
+
+        // Prompt Google and attach token, then retry once
+        const token = await loginAndGetToken().catch(() => null);
+        if (token) {
+          await apiAttachToken({ sessionId, userId, accessToken: token });
+          const res2 = await apiListFiles({ sessionId, userId });
+          renderFiles(res2.files ?? []);
+        } else {
+          filesDiv.innerHTML = `<p class="error">Could not load files.</p>`;
+        }
+      }
+    }
+
+    // --- Socket wiring ---
     connectSocket();
 
     function emitJoin() {
@@ -47,69 +109,37 @@
       console.log("[game] emitting client:join", payload);
       socket.emit("client:join", payload);
     }
+    if (socket.connected) emitJoin();
+    else socket.once("connect", () => { console.log("[game] connected"); emitJoin(); });
 
-    if (socket.connected) {
-      emitJoin();
-    } else {
-      socket.once("connect", () => {
-        console.log("[game] connected");
-        emitJoin();
-      });
-    }
-
-    // Ask for snapshot in case the first presence was missed
     socket.emit("presence:request", { sessionId });
 
-    socket.on("client:joined", (p) => console.log("[game] client:joined ack", p));
     socket.on("presence", ({ users, phase }) => {
       console.log("[game] presence", users, phase);
-      document.getElementById("lobbyUsers").innerHTML =
-        (users ?? []).map(u => `<li>${u.displayName}</li>`).join("");
+      if (lobbyUsers) {
+        lobbyUsers.innerHTML = (users ?? []).map(u => `<li>${u.displayName}</li>`).join("");
+      }
       if (phase === "started") startGame();
     });
 
     socket.on("game:started", () => startGame());
+    socket.on("client:joined", (p) => console.log("[game] client:joined ack", p));
 
-    async function startGame() {
-      if (!gameUI.classList.contains("hidden")) return; // already started
-      lobby.classList.add("hidden");
-      gameUI.classList.remove("hidden");
-      try {
-        const res = await apiListFiles({ sessionId, userId }); // will 403 if not started
-        renderFiles(res.files ?? []);
-      } catch (err) {
-        filesDiv.innerHTML = `<p class="error">Kon bestanden niet laden.</p>`;
-        console.error(err);
-      }
-    }
-
-    function renderFiles(items) {
-      filesDiv.innerHTML = items.map((f) => `
-        <div class="file" draggable="true" data-id="${f.id}" data-name="${f.name}" data-size="${f.size}">
-          <div class="file-name">${f.name}</div>
-          <div class="file-size">${(f.size/1_000_000).toFixed(2)} MB</div>
-        </div>
-      `).join("");
-
-      filesDiv.querySelectorAll(".file").forEach((el) => {
-        el.addEventListener("dragstart", (e) => {
-          e.dataTransfer.setData("text/plain", JSON.stringify({
-            id: el.dataset.id, name: el.dataset.name, size: Number(el.dataset.size),
-          }));
-        });
-      });
-    }
-
-    monster.addEventListener("dragover", (e) => e.preventDefault());
+    // --- Drag to trash ---
+    monster?.addEventListener("dragover", (e) => e.preventDefault());
     monster.addEventListener("drop", async (e) => {
       e.preventDefault();
       try {
         const data = JSON.parse(e.dataTransfer.getData("text/plain"));
         await apiDelete({ sessionId, userId, itemId: data.id, itemName: data.name, size: data.size });
-        const el = filesDiv.querySelector(`[data-id="${data.id}"]`);
-        if (el) el.remove();
+        filesDiv.querySelector(`[data-id="${data.id}"]`)?.remove();
       } catch (err) {
-        alert("Kon het bestand niet verwijderen. Probeer opnieuw.");
+        const msg = String(err?.message || "");
+        if (/permission|403/i.test(msg)) {
+          alert("You don’t have permission to trash this file (shared/read-only). Try another one.");
+        } else {
+          alert("Could not delete. Try again.");
+        }
         console.error(err);
       }
     });

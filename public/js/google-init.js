@@ -1,34 +1,46 @@
 // public/js/google-init.js
 const SCOPES = [
-  "https://www.googleapis.com/auth/drive.metadata.readonly", // list metadata
-  "https://www.googleapis.com/auth/drive"                    // read/write incl. Trash
+  "https://www.googleapis.com/auth/drive.metadata.readonly",
+  "https://www.googleapis.com/auth/drive",
 ];
 
-let tokenClient;
-let currentToken;
+let clientId = null;
+let tokenClient = null;
 
-export function initGoogle(clientId) {
-  tokenClient = google.accounts.oauth2.initTokenClient({
-    client_id: clientId,
-    scope: SCOPES.join(" "),
-    callback: (resp) => {
-      if (resp?.access_token) {
-        currentToken = resp.access_token;
-        window.__setGoogleAccessToken && window.__setGoogleAccessToken(currentToken);
-      } else if (resp?.error) {
-        console.error("[google] token error", resp);
-      }
-    },
-  });
+// Wait until GIS is available
+const gisReady = new Promise((resolve) => {
+  (function wait() {
+    if (window.google?.accounts?.oauth2) resolve();
+    else setTimeout(wait, 50);
+  })();
+});
+
+export function initGoogle(id) {
+  clientId = id;
+}
+
+// Internal: get or create token client (after GIS ready)
+async function getTokenClient() {
+  await gisReady;
+  if (!tokenClient) {
+    if (!clientId) throw new Error("Google clientId not set. Call initGoogle(clientId) first.");
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: SCOPES.join(" "),
+      callback: () => {},
+    });
+  }
+  return tokenClient;
 }
 
 export async function loginAndGetToken() {
+  const tc = await getTokenClient();
   return new Promise((resolve) => {
-    tokenClient.callback = (resp) => resolve(resp?.access_token);
-    tokenClient.requestAccessToken({ prompt: "consent" });
+    tc.callback = (resp) => resolve(resp?.access_token);
+    tc.requestAccessToken({ prompt: "consent" });
   });
 }
 
-// Optional globals (your index.html already expects a setter)
+// Optional globals for quick testing
 window.__initGoogle = initGoogle;
 window.__googleLogin = loginAndGetToken;

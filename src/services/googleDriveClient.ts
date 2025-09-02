@@ -4,7 +4,9 @@ export interface DriveItem {
   id: string;
   name: string;
   size: number;
+  mimeType?: string;
   isFolder?: boolean;
+  canTrash?: boolean;
 }
 
 export class GoogleDriveClient {
@@ -21,26 +23,30 @@ export class GoogleDriveClient {
     const res = await this.drive.files.list({
       q: "trashed = false",
       pageSize: 100,
-      fields: "files(id,name,size,mimeType,trashed)",
       corpora: "user",
-      includeItemsFromAllDrives: false,
-      supportsAllDrives: false,
+      includeItemsFromAllDrives: true,
+      supportsAllDrives: true,
+      // Ask for capabilities.canTrash and ownedByMe to decide UI
+      fields: "files(id,name,size,mimeType,trashed,ownedByMe,capabilities/canTrash)",
     });
+
     const items = res.data.files ?? [];
     return items.map((f) => ({
       id: f.id!,
       name: f.name ?? "untitled",
       size: Number(f.size ?? 0),
+      mimeType: f.mimeType ?? "",
       isFolder: f.mimeType === "application/vnd.google-apps.folder",
+      canTrash: Boolean(f.capabilities?.canTrash),
     }));
   }
 
-  // Send file to Google Drive Trash
   async deleteItem(fileId: string): Promise<void> {
+    // Move to Trash (requires canTrash permission)
     await this.drive.files.update({
       fileId,
       requestBody: { trashed: true },
-      supportsAllDrives: false,
+      supportsAllDrives: true,
     });
   }
 }

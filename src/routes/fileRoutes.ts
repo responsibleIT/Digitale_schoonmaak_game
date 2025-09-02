@@ -69,24 +69,25 @@ export function buildFileRoutes(
 
     try {
       const drive = new GoogleDriveClient(user.accessToken);
-
-      // Perform soft delete (move to Trash)
       await drive.deleteItem(itemId);
 
-      // OPTIONAL VERIFY SIZE (if you ever want to trust server-side only):
-      // const meta = await drive.getMetadata(itemId)  // you'd add this helper
-      // const realSize = Number(meta.size ?? size);
-
-      // Update stats & broadcast
       stats.applyDeletion(session, userId, itemName, size);
       const snapshot = stats.snapshot(session);
       io.to(`session:${sessionId}`).emit("stats", snapshot);
 
       return res.json({ ok: true });
     } catch (err: any) {
-      const msg = err?.message || "Google Drive error";
-      const status = /insufficientPermissions|unauthorized|invalid_grant|401|403/i.test(msg) ? 401 : 502;
-      return res.status(status).json({ error: status === 401 ? "Google token expired or missing. Please log in again." : msg });
+      const msg = String(err?.message || "");
+      if (/insufficientPermissions|cannotTrash|forbidden|403/i.test(msg)) {
+        return res.status(403).json({
+          error: "You don’t have permission to trash this file (shared or read-only).",
+        });
+      }
+      // existing 401 mapping if you had it:
+      if (/unauthorized|invalid_grant|401/i.test(msg)) {
+        return res.status(401).json({ error: "Google token expired or missing. Please log in again." });
+      }
+      return res.status(502).json({ error: "Google Drive error while deleting." });
     }
   });
 

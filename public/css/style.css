@@ -106,3 +106,9 @@ button:hover { filter: brightness(1.05); }
 .error { color: #ffb3b3; }
 
 #lobby ul { margin: 8px 0 0; padding-left: 18px; }
+
+.file.disabled {
+  opacity: 0.5;
+  pointer-events: none; /* no drag */
+}
+.file .lock { font-size: 0.9rem; opacity: 0.8; }

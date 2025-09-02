@@ -12,12 +12,23 @@ async function handle(r) {
 }
 
 export async function apiJoin({ sessionId, userId, displayName, accessToken }) {
-  const r = await fetch("/api/auth/join", {
+  const res = await fetch("/api/session/join", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sessionId, userId, displayName, accessToken }),
   });
-  return handle(r);
+  if (!res.ok) throw new Error("join failed");
+  return res.json();
+}
+
+export async function apiAttachToken({ sessionId, userId, accessToken }) {
+  const res = await fetch("/api/session/attach-token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, userId, accessToken }),
+  });
+  if (!res.ok) throw new Error("attach token failed");
+  return res.json();
 }
 
 export async function apiListFiles({ sessionId, userId }) {
