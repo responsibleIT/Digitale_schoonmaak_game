@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Dashboardgame – Join</title>
   <link rel="stylesheet" href="/css/style.css" />
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
   <main class="container">
@@ -23,7 +24,7 @@
         </label>
 
         <div class="hint">(Optioneel) Inloggen met Microsoft kan hier, of later:</div>
-        <button type="button" id="msalLogin" class="secondary">Log in met Microsoft</button>
+        <button type="button" id="msalLogin" class="secondary">Log in met Google</button>
 
         <button type="submit" class="primary">Join</button>
         <p id="err" class="error"></p>
@@ -37,42 +38,40 @@
 
   <!-- You can remove socket.js here if you like; we don't use it on this page -->
   <!-- <script type="module" src="/js/socket.js"></script> -->
-  <script type="module" src="/js/msal-init.js"></script>
-  <script type="module">
+  <script type="module" src="/js/google-init.js"></script>
+    <script type="module">
+    import { initGoogle, loginAndGetToken } from "/js/google-init.js";
     import { apiJoin } from "/js/api.js";
 
-    const $ = (sel) => document.querySelector(sel);
+    initGoogle("752962192093-r6fkli0tcuh8lbfgrn16fldnub4jvvem.apps.googleusercontent.com");
+
+    const $ = (s) => document.querySelector(s);
     const form = $("#join-form");
-    const msalBtn = $("#msalLogin");
+    const loginBtn = $("#msalLogin"); // you can rename the text to “Log in met Google”
     const errEl = $("#err");
 
-    let accessToken; // wordt gezet door MSAL (optioneel)
-    window.__setMsalAccessToken = (t) => (accessToken = t);
+    let accessToken;
+    window.__setGoogleAccessToken = (t) => (accessToken = t);
+
+    loginBtn.addEventListener("click", async () => {
+      accessToken = await loginAndGetToken();
+      if (!accessToken) alert("Google login geannuleerd of mislukt.");
+    });
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       errEl.textContent = "";
-
-      // Normalize ID: trim + uppercase to match server codes like "9B4563"
       const sessionId = $("#sessionId").value.trim().toUpperCase();
       const displayName = $("#displayName").value.trim();
       const userId = crypto.randomUUID();
 
       try {
-        await apiJoin({ sessionId, userId, displayName, accessToken });
+        await apiJoin({ sessionId, userId, displayName, accessToken }); // token stored on user
         const q = new URLSearchParams({ sessionId, userId, displayName });
         window.location.href = `/game.html?${q.toString()}`;
       } catch (err) {
         console.error(err);
         errEl.textContent = "Kon niet joinen. Klopt het sessie-ID?";
-      }
-    });
-
-    msalBtn.addEventListener("click", async () => {
-      if (window.__msalLogin) {
-        accessToken = await window.__msalLogin();
-      } else {
-        alert("MSAL nog niet geconfigureerd. Je kunt zonder token verder testen.");
       }
     });
   </script>

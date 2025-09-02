@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { Server as IOServer } from "socket.io";
 import { SessionManager } from "../core/sessionManager.js";
 import { StatsEngine } from "../services/statsEngine.js";
-import { GraphClient } from "../services/graphClient.js";
+import { GoogleDriveClient } from "../services/googleDriveClient.js";
 
 export function buildFileRoutes(
   sessions: SessionManager,
@@ -24,23 +24,25 @@ export function buildFileRoutes(
       sessionId: String(req.query.sessionId ?? ""),
       userId: String(req.query.userId ?? ""),
     });
-    
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
     const session = sessions.get(parsed.data.sessionId);
     if (!session) return res.status(404).json({ error: "Session not found" });
-
-    if (session.phase !== "started") {
-      return res.status(403).json({ error: "Game not started yet" });
-    }
+    if (session.phase !== "started") return res.status(403).json({ error: "Game not started yet" });
 
     const user = session.users.get(parsed.data.userId);
     if (!user) return res.status(404).json({ error: "User not in session" });
+    if (!user.accessToken) return res.status(401).json({ error: "Not authenticated with Google. Please log in." });
 
-    // Vervang GraphClient door echte Microsoft Graph-implementatie
-    const gc = new GraphClient(user.accessToken);
-    const files = await gc.listUserDrive();
-    res.json({ files });
+    try {
+      const drive = new GoogleDriveClient(user.accessToken);
+      const files = await drive.listUserDrive();
+      return res.json({ files });
+    } catch (err: any) {
+      const msg = err?.message || "Google Drive error";
+      const status = /insufficientPermissions|unauthorized|invalid_grant|401|403/i.test(msg) ? 401 : 502;
+      return res.status(status).json({ error: status === 401 ? "Google token expired or missing. Please log in again." : msg });
+    }
   });
 
   // POST /api/files/delete
@@ -49,7 +51,7 @@ export function buildFileRoutes(
     userId: z.string().min(1),
     itemId: z.string().min(1),
     itemName: z.string().default("item"),
-    size: z.coerce.number().nonnegative().default(0),
+    size: z.coerce.number().nonnegative().default(0), // trusted from client (ok for workshop)
   });
 
   r.post("/delete", async (req, res) => {
@@ -59,24 +61,33 @@ export function buildFileRoutes(
     const { sessionId, userId, itemId, itemName, size } = parsed.data;
     const session = sessions.get(sessionId);
     if (!session) return res.status(404).json({ error: "Session not found" });
-
-    if (session.phase !== "started") {
-      return res.status(403).json({ error: "Game not started yet" });
-    }
+    if (session.phase !== "started") return res.status(403).json({ error: "Game not started yet" });
 
     const user = session.users.get(userId);
     if (!user) return res.status(404).json({ error: "User not in session" });
+    if (!user.accessToken) return res.status(401).json({ error: "Not authenticated with Google. Please log in." });
 
-    // Verwijder (naar prullenbak) via Graph
-    const gc = new GraphClient(user.accessToken);
-    await gc.deleteItem(itemId);
+    try {
+      const drive = new GoogleDriveClient(user.accessToken);
 
-    // Stats updaten + broadcast naar room
-    stats.applyDeletion(session, userId, itemName, size);
-    const snapshot = stats.snapshot(session);
-    io.to(`session:${sessionId}`).emit("stats", snapshot);
+      // Perform soft delete (move to Trash)
+      await drive.deleteItem(itemId);
 
-    res.json({ ok: true });
+      // OPTIONAL VERIFY SIZE (if you ever want to trust server-side only):
+      // const meta = await drive.getMetadata(itemId)  // you'd add this helper
+      // const realSize = Number(meta.size ?? size);
+
+      // Update stats & broadcast
+      stats.applyDeletion(session, userId, itemName, size);
+      const snapshot = stats.snapshot(session);
+      io.to(`session:${sessionId}`).emit("stats", snapshot);
+
+      return res.json({ ok: true });
+    } catch (err: any) {
+      const msg = err?.message || "Google Drive error";
+      const status = /insufficientPermissions|unauthorized|invalid_grant|401|403/i.test(msg) ? 401 : 502;
+      return res.status(status).json({ error: status === 401 ? "Google token expired or missing. Please log in again." : msg });
+    }
   });
 
   return r;
