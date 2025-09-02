@@ -132,7 +132,18 @@
       try {
         const data = JSON.parse(e.dataTransfer.getData("text/plain"));
         await apiDelete({ sessionId, userId, itemId: data.id, itemName: data.name, size: data.size });
-        filesDiv.querySelector(`[data-id="${data.id}"]`)?.remove();
+        const el = filesDiv.querySelector(`[data-id="${data.id}"]`);
+        if (el) {
+          el.classList.add("poof");
+          setTimeout(() => el.remove(), 300);
+        }
+        // kleine local confetti
+        (() => {
+          const s = document.createElement("span");
+          s.className = "mini-pop";
+          document.body.appendChild(s);
+          setTimeout(()=>s.remove(), 500);
+        })();
       } catch (err) {
         const msg = String(err?.message || "");
         if (/permission|403/i.test(msg)) {

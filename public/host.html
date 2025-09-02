@@ -43,80 +43,156 @@
 
   <script type="module" src="/js/socket.js"></script>
   <script type="module">
-    import { socket, connectSocket } from "/js/socket.js";
-    connectSocket();
+  import { socket, connectSocket } from "/js/socket.js";
 
-    const $ = (s) => document.querySelector(s);
-    const startBtn     = $("#start");
-    const sessionBox   = $("#sessionBox");
-    const sessionIdEl  = $("#sessionId");         // must exist
-    const beginBtn     = $("#begin");
-    const refreshBtn   = $("#refreshStats");
-    const endBtn       = $("#end");
-    const lobbyList    = $("#hostLobbyUsers");
-    const leaderboard  = $("#leaderboard");
-    const totals       = $("#totals");
+  connectSocket();
 
-    let sessionId;
+  const $ = (s) => document.querySelector(s);
+  const startBtn    = $("#start");
+  const beginBtn    = $("#begin");
+  const endBtn      = $("#end");
+  const sessionBox  = $("#sessionBox");
+  const sessionIdEl = $("#sessionId");
+  const lobbyList   = $("#hostLobbyUsers");
 
-    // Helpers with guards to avoid null errors
-    function setSessionId(id) {
-      if (sessionIdEl) sessionIdEl.textContent = id;
-      if (sessionBox) sessionBox.classList.remove("hidden");
-    }
-    function renderLobby(users = []) {
-      if (!lobbyList) return;
-      lobbyList.innerHTML = users.map(u => `<li>${u.displayName}</li>`).join("");
-    }
-    function renderStats(snap) {
-      if (leaderboard) {
-        leaderboard.innerHTML = snap.leaderboard
-          .map(l => `<li><strong>${l.displayName}</strong> — ${(l.bytes/1_000_000).toFixed(2)} MB (${l.items} items)</li>`)
-          .join("");
+  // Nieuwe elementen
+  const podiumEl    = document.createElement("div"); podiumEl.id = "podium";
+  const tableWrap   = document.createElement("div"); tableWrap.id = "lbWrap";
+  const totalsEl    = document.createElement("div"); totalsEl.id = "totalsHost";
+  sessionBox.appendChild(podiumEl);
+  sessionBox.appendChild(tableWrap);
+  sessionBox.appendChild(totalsEl);
+
+  let sessionId;
+
+  function setSessionId(id){ sessionIdEl.textContent = id; sessionBox.classList.remove("hidden"); }
+
+  startBtn?.addEventListener("click", () => socket.emit("host:start"));
+  beginBtn?.addEventListener("click", () => sessionId && socket.emit("host:begin", { sessionId }));
+  endBtn?.addEventListener("click", () => sessionId && socket.emit("host:end", { sessionId }));
+
+  socket.on("host:sessionId", (p) => {
+    sessionId = p.sessionId;
+    setSessionId(sessionId);
+    socket.emit("presence:request", { sessionId });
+  });
+
+  socket.on("presence", ({ users, phase }) => {
+    lobbyList.innerHTML = (users ?? []).map(u => `<li>${u.displayName}</li>`).join("");
+  });
+
+  socket.on("stats", (snap) => renderStats(snap));
+  socket.on("game:event", (ev) => showEvent(ev));
+
+  function renderStats(snap) {
+    // Podium (top 3)
+    const top = (snap.leaderboard ?? []).slice(0,3);
+    podiumEl.innerHTML = `
+      <div class="podium">
+        ${[1,0,2].map(i => {
+          const p = top[i];
+          return `
+            <div class="step step-${i}">
+              <div class="name">${p ? p.displayName : "-"}</div>
+              <div class="score">${p ? (p.bytes/1_000_000).toFixed(1) : "0"} MB</div>
+            </div>`;
+        }).join("")}
+      </div>`;
+
+    // Tabel (vanaf #4)
+    const rest = (snap.leaderboard ?? []).slice(3);
+    tableWrap.innerHTML = `
+      <table class="leader">
+        <thead><tr>
+          <th>#</th><th>Naam</th><th>MB</th><th>Items</th><th>Streak</th><th>Tempo</th><th>Grootste</th>
+        </tr></thead>
+        <tbody>
+          ${rest.map((r, idx) => `
+            <tr>
+              <td>${idx+4}</td>
+              <td>${r.displayName}</td>
+              <td>${(r.bytes/1_000_000).toFixed(1)}</td>
+              <td>${r.items}</td>
+              <td>${r.streak}</td>
+              <td>${r.ratePerMin.toFixed(0)}/min</td>
+              <td>
+                ${
+                  r.largestName
+                    ? `${r.largestName} (${r.largestSize ? (r.largestSize / 1_000_000).toFixed(0) + "MB" : "-"})`
+                    : "-"
+                }
+              </td>
+            </tr>`).join("")}
+        </tbody>
+      </table>`;
+
+    totalsEl.innerHTML = `
+      <div class="totals">
+        <div><strong>Totaal:</strong> ${(snap.totalBytes/1_000_000).toFixed(0)} MB over ${snap.totalItems} items</div>
+        <div><strong>CO₂ bespaard (speels):</strong> ${snap.totalCo2kg.toFixed(2)} kg</div>
+      </div>`;
+  }
+
+  // Toasts + confetti voor events
+  function showEvent(ev){
+    const titles = {
+      "first-blood": "Eerste klapper!",
+      "streak": "Combo!",
+      "chonk": "Dik bestand!",
+      "milestone-bytes": "Mijlpaal!",
+      "milestone-items": "Mijlpaal!"
+    };
+    const msg = (() => {
+      switch(ev.type){
+        case "first-blood": return `${ev.displayName} startte het feest 🎉`;
+        case "streak": return `${ev.displayName} heeft een streak van ${ev.payload.streak}! 🔥`;
+        case "chonk": return `${ev.displayName} verwijderde ${(ev.payload.size/1_000_000).toFixed(0)} MB (${ev.payload.itemName}) 💪`;
+        case "milestone-bytes": return `${ev.displayName} passeerde ${ev.payload.totalMB} MB!`;
+        case "milestone-items": return `${ev.displayName} tikte ${ev.payload.totalItems} items aan!`;
+        default: return `${ev.displayName} is lekker bezig!`;
       }
-      if (totals) {
-        totals.textContent = `Totaal: ${(snap.totalBytes/1_000_000).toFixed(2)} MB over ${snap.totalItems} items.`;
-      }
+    })();
+
+    toast(`${titles[ev.type] ?? "Nice!"}`, msg);
+    confettiBurst();
+  }
+
+  // super simpele toast
+  function toast(title, text){
+    const t = document.createElement("div");
+    t.className = "toast";
+    t.innerHTML = `<div class="toast-title">${title}</div><div>${text}</div>`;
+    document.body.appendChild(t);
+    setTimeout(() => t.classList.add("show"), 10);
+    setTimeout(() => { t.classList.remove("show"); setTimeout(()=>t.remove(), 300); }, 3000);
+  }
+
+  // mini confetti zonder lib
+  function confettiBurst() {
+    const c = document.createElement("canvas");
+    c.className = "confetti";
+    c.width = window.innerWidth; c.height = 200;
+    document.body.appendChild(c);
+    const ctx = c.getContext("2d");
+
+    const bits = Array.from({ length: 120 }, () => ({
+      x: Math.random()*c.width, y: -10, s: 4+Math.random()*6,
+      vy: 2+Math.random()*3, vx: -1+Math.random()*2
+    }));
+
+    let frames = 0;
+    function tick(){
+      ctx.clearRect(0,0,c.width,c.height);
+      bits.forEach(b=>{
+        b.x += b.vx; b.y += b.vy;
+        ctx.fillRect(b.x,b.y,b.s,b.s);
+      });
+      frames++;
+      if (frames < 60) requestAnimationFrame(tick);
+      else c.remove();
     }
-
-    // Buttons
-    startBtn?.addEventListener("click", () => socket.emit("host:start"));
-    beginBtn?.addEventListener("click", () => { if (sessionId) socket.emit("host:begin", { sessionId }); });
-    refreshBtn?.addEventListener("click", () => { if (sessionId) socket.emit("host:requestStats", { sessionId }); });
-    endBtn?.addEventListener("click", () => { if (sessionId) socket.emit("host:end", { sessionId }); });
-
-    // Socket events
-    socket.on("host:sessionId", (p) => {
-      sessionId = p.sessionId;
-      setSessionId(sessionId);
-      socket.emit("presence:request", { sessionId });
-    });
-
-    socket.on("presence", ({ users, phase }) => {
-      console.log("[host] presence", users, phase);
-      document.getElementById("hostLobbyUsers").innerHTML =
-        (users ?? []).map(u => `<li>${u.displayName}</li>`).join("");
-    });
-
-    socket.on("game:started", () => {
-      console.log("[host] game:started");
-      // host already shows stats area; no extra UI change needed
-    });
-
-    socket.on("stats", (snap) => {
-      console.log("[host] stats", snap);
-      renderStats(snap);
-    });
-
-    socket.on("session:ended", () => {
-      alert("Sessie beëindigd.");
-      sessionId = undefined;
-      if (sessionBox) sessionBox.classList.add("hidden");
-      renderLobby([]);
-      renderStats({ leaderboard:[], totalBytes:0, totalItems:0 });
-    });
-
-    socket.on("error", (e) => console.error("[host] error", e));
-  </script>
+    tick();
+  }
+</script>
 </body>
 </html>

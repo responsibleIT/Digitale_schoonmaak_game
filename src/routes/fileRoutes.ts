@@ -71,10 +71,18 @@ export function buildFileRoutes(
       const drive = new GoogleDriveClient(user.accessToken);
       await drive.deleteItem(itemId);
 
-      stats.applyDeletion(session, userId, itemName, size);
+      // Stats bijwerken + events
+      const events = stats.applyDeletion(session, userId, itemName, size);
       const snapshot = stats.snapshot(session);
+
+      // broadcast reguliere stats
       io.to(`session:${sessionId}`).emit("stats", snapshot);
 
+      // broadcast leuke events (toasts/confetti)
+      for (const ev of events) {
+        io.to(`session:${sessionId}`).emit("game:event", ev);
+      }
+      
       return res.json({ ok: true });
     } catch (err: any) {
       const msg = String(err?.message || "");
