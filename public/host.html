@@ -27,14 +27,20 @@
 
           <div class="row gap">
             <button id="begin" class="primary">Start het spel</button>
-            <button id="refreshStats" class="secondary">Vernieuw stats</button>
+            <button id="refreshStats" class="secondary" title="Vraag een statssnapshot op">Vernieuw stats</button>
             <button id="end" class="danger">Beëindig sessie</button>
           </div>
 
           <section class="stats">
             <h3>Leaderboard</h3>
+            <!-- old simple list kept (not used now but harmless) -->
             <ol id="leaderboard"></ol>
             <p id="totals" class="muted"></p>
+
+            <!-- New visual containers -->
+            <div id="podium"></div>
+            <div id="lbWrap"></div>
+            <div id="totalsHost"></div>
           </section>
         </div>
       </div>
@@ -43,185 +49,211 @@
 
   <script type="module" src="/js/socket.js"></script>
   <script type="module">
-  import { socket, connectSocket } from "/js/socket.js";
+    import { socket, connectSocket } from "/js/socket.js";
+    connectSocket();
 
-  connectSocket();
+    const $ = (s) => document.querySelector(s);
+    const startBtn    = $("#start");
+    const beginBtn    = $("#begin");
+    const endBtn      = $("#end");
+    const refreshBtn  = $("#refreshStats");
+    const sessionBox  = $("#sessionBox");
+    const sessionIdEl = $("#sessionId");
+    const lobbyList   = $("#hostLobbyUsers");
+    const podiumEl    = $("#podium");
+    const tableWrap   = $("#lbWrap");
+    const totalsEl    = $("#totalsHost");
 
-  const $ = (s) => document.querySelector(s);
-  const startBtn    = $("#start");
-  const beginBtn    = $("#begin");
-  const endBtn      = $("#end");
-  const sessionBox  = $("#sessionBox");
-  const sessionIdEl = $("#sessionId");
-  const lobbyList   = $("#hostLobbyUsers");
+    let sessionId;
 
-  // Nieuwe elementen
-  const podiumEl    = document.createElement("div"); podiumEl.id = "podium";
-  const tableWrap   = document.createElement("div"); tableWrap.id = "lbWrap";
-  const totalsEl    = document.createElement("div"); totalsEl.id = "totalsHost";
-  sessionBox.appendChild(podiumEl);
-  sessionBox.appendChild(tableWrap);
-  sessionBox.appendChild(totalsEl);
+    function setSessionId(id){
+      sessionIdEl.textContent = id;
+      sessionBox.classList.remove("hidden");
+    }
 
-  let sessionId;
-
-  function setSessionId(id){ sessionIdEl.textContent = id; sessionBox.classList.remove("hidden"); }
-
-  startBtn?.addEventListener("click", () => socket.emit("host:start"));
-  beginBtn?.addEventListener("click", () => {
-    if (sessionId) {
+    // --- Buttons
+    startBtn?.addEventListener("click", () => socket.emit("host:start"));
+    beginBtn?.addEventListener("click", () => {
+      if (!sessionId) return;
       socket.emit("host:begin", { sessionId });
-      socket.emit("presence:request", { sessionId }); // optional
-    }
-  });
-  endBtn?.addEventListener("click", () => sessionId && socket.emit("host:end", { sessionId }));
+      socket.emit("presence:request", { sessionId }); // safety
+    });
+    refreshBtn?.addEventListener("click", () => sessionId && socket.emit("presence:request", { sessionId }));
+    endBtn?.addEventListener("click", () => sessionId && socket.emit("host:end", { sessionId }));
 
-  socket.on("host:sessionId", (p) => {
-    sessionId = p.sessionId;
-    setSessionId(sessionId);
-    socket.emit("presence:request", { sessionId });
-  });
+    // --- Session ID from server
+    socket.on("host:sessionId", (p) => {
+      sessionId = p.sessionId;
+      setSessionId(sessionId);
+      socket.emit("presence:request", { sessionId });
+    });
 
-  let allReady = false;
-
-  socket.on("presence", ({ users, phase, allReady }) => {
-    const beginBtn = document.getElementById("begin");
-    if (beginBtn) {
-      beginBtn.disabled = !allReady;
-      beginBtn.style.opacity = allReady ? "1" : ".6";
-      beginBtn.title = allReady ? "" : "Waiting for all players to finish loading…";
-    }
-
-    const lobbyList = document.getElementById("hostLobbyUsers");
-    if (lobbyList) {
-      lobbyList.innerHTML = (users ?? []).map(u => {
-        const st = u.status || {};
-        const state = st.ready ? "✅ Ready"
-          : st.selected ? `⏳ ${st.loadingPct ?? 0}% (${st.filesCount ?? 0})`
-          : "⬜ Not selected";
-        return `<li>${u.displayName} — ${state}</li>`;
-      }).join("");
-    }
-  });
-
-  socket.on("stats", (snap) => {
-    // your existing renderStats(snap)
-    renderStats(snap);
-  });
-  socket.on("game:event", (ev) => {
-    // optional: the toast/confetti handler from earlier
-    showEvent(ev);
-  });
-
-  function renderStats(snap) {
-    // Podium (top 3)
-    const top = (snap.leaderboard ?? []).slice(0,3);
-    podiumEl.innerHTML = `
-      <div class="podium">
-        ${[1,0,2].map(i => {
-          const p = top[i];
-          return `
-            <div class="step step-${i}">
-              <div class="name">${p ? p.displayName : "-"}</div>
-              <div class="score">${p ? (p.bytes/1_000_000).toFixed(1) : "0"} MB</div>
-            </div>`;
-        }).join("")}
-      </div>`;
-
-    // Tabel (vanaf #4)
-    const rest = (snap.leaderboard ?? []).slice(3);
-    tableWrap.innerHTML = `
-      <table class="leader">
-        <thead><tr>
-          <th>#</th><th>Naam</th><th>MB</th><th>Items</th><th>Streak</th><th>Tempo</th><th>Grootste</th>
-        </tr></thead>
-        <tbody>
-          ${rest.map((r, idx) => `
-            <tr>
-              <td>${idx+4}</td>
-              <td>${r.displayName}</td>
-              <td>${(r.bytes/1_000_000).toFixed(1)}</td>
-              <td>${r.items}</td>
-              <td>${r.streak}</td>
-              <td>${r.ratePerMin.toFixed(0)}/min</td>
-              <td>
-                ${
-                  r.largestName
-                    ? `${r.largestName} (${r.largestSize ? (r.largestSize / 1_000_000).toFixed(0) + "MB" : "-"})`
-                    : "-"
-                }
-              </td>
-            </tr>`).join("")}
-        </tbody>
-      </table>`;
-
-    totalsEl.innerHTML = `
-      <div class="totals">
-        <div><strong>Totaal:</strong> ${(snap.totalBytes/1_000_000).toFixed(0)} MB over ${snap.totalItems} items</div>
-        <div><strong>CO₂ bespaard (speels):</strong> ${snap.totalCo2kg.toFixed(2)} kg</div>
-      </div>`;
-  }
-
-  // Toasts + confetti voor events
-  function showEvent(ev){
-    const titles = {
-      "first-blood": "Eerste klapper!",
-      "streak": "Combo!",
-      "chonk": "Dik bestand!",
-      "milestone-bytes": "Mijlpaal!",
-      "milestone-items": "Mijlpaal!"
-    };
-    const msg = (() => {
-      switch(ev.type){
-        case "first-blood": return `${ev.displayName} startte het feest 🎉`;
-        case "streak": return `${ev.displayName} heeft een streak van ${ev.payload.streak}! 🔥`;
-        case "chonk": return `${ev.displayName} verwijderde ${(ev.payload.size/1_000_000).toFixed(0)} MB (${ev.payload.itemName}) 💪`;
-        case "milestone-bytes": return `${ev.displayName} passeerde ${ev.payload.totalMB} MB!`;
-        case "milestone-items": return `${ev.displayName} tikte ${ev.payload.totalItems} items aan!`;
-        default: return `${ev.displayName} is lekker bezig!`;
+    // --- Presence: show readiness + gate Start
+    socket.on("presence", ({ users, phase, allReady }) => {
+      if (beginBtn) {
+        beginBtn.disabled = !allReady;
+        beginBtn.style.opacity = allReady ? "1" : ".6";
+        beginBtn.title = allReady ? "" : "Wachten tot iedereen klaar is…";
       }
-    })();
 
-    toast(`${titles[ev.type] ?? "Nice!"}`, msg);
-    confettiBurst();
-  }
+      if (lobbyList) {
+        lobbyList.innerHTML = (users ?? []).map(u => {
+          const st = u.status || {};
+          const state = st.ready ? "✅ Ready"
+            : st.selected ? `⏳ ${st.loadingPct ?? 0}% (${st.filesCount ?? 0})`
+            : "⬜ Not selected";
+          return `<li>${u.displayName} — ${state}</li>`;
+        }).join("");
+      }
+    });
 
-  // super simpele toast
-  function toast(title, text){
-    const t = document.createElement("div");
-    t.className = "toast";
-    t.innerHTML = `<div class="toast-title">${title}</div><div>${text}</div>`;
-    document.body.appendChild(t);
-    setTimeout(() => t.classList.add("show"), 10);
-    setTimeout(() => { t.classList.remove("show"); setTimeout(()=>t.remove(), 300); }, 3000);
-  }
+    // --- Stats: render + small confetti every update
+    socket.on("stats", (snap) => {
+      renderStats(snap);
+      confettiBurst(24, 600); // keep it lively
+    });
 
-  // mini confetti zonder lib
-  function confettiBurst() {
-    const c = document.createElement("canvas");
-    c.className = "confetti";
-    c.width = window.innerWidth; c.height = 200;
-    document.body.appendChild(c);
-    const ctx = c.getContext("2d");
+    // --- Big celebration events
+    socket.on("game:event", (ev) => {
+      // ev = { kind, byName, size?, streak?, text? }
+      switch (ev.kind) {
+        case "milestone:100MB":
+          bigOverlay(`🎉 ${ev.byName} haalde 100 MB!`, "Lekker bezig!", "#18c1be");
+          break;
+        case "milestone:500MB":
+          bigOverlay(`🚀 ${ev.byName} knalt 500 MB!!`, "Legend!", "#ffb703");
+          break;
+        case "streak:5":
+          bigOverlay(`🔥 ${ev.byName} heeft een 5x streak!`, "Combo time!", "#ff7096");
+          break;
+        case "bigfile":
+          bigOverlay(`📦 ${ev.byName} verwijderde ${(ev.size/1_000_000).toFixed(0)} MB`, "Massive!", "#8f85ff");
+          break;
+        default:
+          bigOverlay(ev.text || "Nice!", ev.byName || "", "#8f85ff");
+      }
+    });
 
-    const bits = Array.from({ length: 120 }, () => ({
-      x: Math.random()*c.width, y: -10, s: 4+Math.random()*6,
-      vy: 2+Math.random()*3, vx: -1+Math.random()*2
-    }));
+    // ---------- RENDERING ----------
+    function renderStats(snap){
+      const lb = [...(snap.leaderboard || [])].sort((a,b)=>b.bytes-a.bytes);
 
-    let frames = 0;
-    function tick(){
-      ctx.clearRect(0,0,c.width,c.height);
-      bits.forEach(b=>{
-        b.x += b.vx; b.y += b.vy;
-        ctx.fillRect(b.x,b.y,b.s,b.s);
-      });
-      frames++;
-      if (frames < 60) requestAnimationFrame(tick);
-      else c.remove();
+      // 1) Podium (1st, 2nd, 3rd left→right)
+      const top = lb.slice(0,3);
+      if (podiumEl) {
+        podiumEl.innerHTML = `
+          <div class="podium">
+            ${[0,1,2].map(i => {
+              const p = top[i] || { displayName: "-", bytes: 0 };
+              return `
+                <div class="step step-${i}">
+                  <div class="place">${["1st","2nd","3rd"][i]}</div>
+                  <div class="name">${p.displayName}</div>
+                  <div class="score">${(p.bytes/1_000_000).toFixed(1)} MB</div>
+                </div>`;
+            }).join("")}
+          </div>`;
+      }
+
+      // 2) Full table (everyone)
+      if (tableWrap) {
+        tableWrap.innerHTML = `
+          <table class="leader">
+            <thead>
+              <tr><th>#</th><th>Naam</th><th>MB</th><th>Items</th><th>Streak</th><th>Tempo</th><th>Grootste</th></tr>
+            </thead>
+            <tbody>
+              ${lb.map((r,idx)=>`
+                <tr class="${idx===0 ? "row-first" : ""}">
+                  <td>${idx+1}</td>
+                  <td>${r.displayName}</td>
+                  <td>${(r.bytes/1_000_000).toFixed(1)}</td>
+                  <td>${r.items}</td>
+                  <td>${r.streak}</td>
+                  <td>${r.ratePerMin.toFixed(1)}/min</td>
+                  <td>${
+                    r.largestName
+                      ? `${r.largestName} (${r.largestSize ? (r.largestSize/1_000_000).toFixed(0)+"MB" : "-"})`
+                      : "-"
+                  }</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+          <div class="totals">
+            <div><strong>Totaal:</strong> ${(snap.totalBytes/1_000_000).toFixed(0)} MB over ${snap.totalItems} items</div>
+            <div><strong>CO₂ bespaard (speels):</strong> ${ (snap.totalBytes/1_000_000_000).toFixed(2) } kg</div>
+          </div>`;
+      }
     }
-    tick();
-  }
-</script>
+
+    // ---------- FX ----------
+    function confettiBurst(n = 120, dur = 1200) {
+      let c = document.getElementById("confetti");
+      if (!c) {
+        c = document.createElement("canvas");
+        c.id = "confetti";
+        c.className = "confetti";
+        document.body.appendChild(c);
+      }
+      const ctx = c.getContext("2d");
+      c.width = innerWidth; c.height = innerHeight;
+      const parts = Array.from({ length: n }, () => ({
+        x: Math.random() * c.width,
+        y: -10 - Math.random() * 80,
+        vx: (Math.random() - .5) * 8,
+        vy: 3 + Math.random() * 6,
+        s: 4 + Math.random() * 6,
+        a: 1,
+        rot: Math.random() * Math.PI,
+        vr: (Math.random() - .5) * .3
+      }));
+      const t0 = performance.now();
+      (function tick(t){
+        const dt = (t - (tick.t||t)) / 16; tick.t = t;
+        ctx.clearRect(0,0,c.width,c.height);
+        parts.forEach(p=>{
+          p.x += p.vx*dt; p.y += p.vy*dt; p.rot += p.vr*dt; p.a -= 0.008*dt;
+          ctx.save(); ctx.globalAlpha = Math.max(0,p.a);
+          ctx.translate(p.x,p.y); ctx.rotate(p.rot);
+          ctx.fillStyle = ["#8f85ff","#6a5ae0","#18c1be","#ffb703","#ff7096"][p.s|0 % 5];
+          ctx.fillRect(-p.s/2,-p.s/2,p.s,p.s);
+          ctx.restore();
+        });
+        if (performance.now() - t0 < dur) requestAnimationFrame(tick);
+        else ctx.clearRect(0,0,c.width,c.height);
+      })(performance.now());
+    }
+
+    function bigOverlay(message, sub = "", color = "#8f85ff") {
+      let o = document.getElementById("fxOverlay");
+      if (!o) {
+        o = document.createElement("div");
+        o.id = "fxOverlay";
+        o.className = "fx-overlay";
+        o.innerHTML = `<div class="fx-inner"><div class="fx-title"></div><div class="fx-sub"></div></div>`;
+        document.body.appendChild(o);
+      }
+      o.querySelector(".fx-title").textContent = message;
+      o.querySelector(".fx-sub").textContent = sub;
+      o.style.setProperty("--fx-color", color);
+      o.classList.remove("hide");
+      o.classList.add("show");
+      confettiBurst(220, 2000);
+      // fun little haptic using Vibration API (best-effort)
+      if (navigator.vibrate) navigator.vibrate([40,20,40,20,80]);
+      setTimeout(()=>o.classList.add("hide"), 2200);
+    }
+
+    // simple toast (kept, used rarely)
+    function toast(title, text){
+      const t = document.createElement("div");
+      t.className = "toast";
+      t.innerHTML = `<div class="toast-title">${title}</div><div>${text}</div>`;
+      document.body.appendChild(t);
+      setTimeout(() => t.classList.add("show"), 10);
+      setTimeout(() => { t.classList.remove("show"); setTimeout(()=>t.remove(), 300); }, 3000);
+    }
+  </script>
 </body>
 </html>

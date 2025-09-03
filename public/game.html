@@ -93,6 +93,18 @@
 
     socket.on("game:started", () => showGame());
 
+    // Listen to server events; show only if this player hit it
+    socket.on("game:event", (ev) => {
+      if (ev.userId && ev.userId !== userId) return;
+      if (ev.kind?.startsWith("milestone")) {
+        personalOverlay("🎉 Milestone!", ev.text || "Great job!");
+      } else if (ev.kind==="streak:5") {
+        personalOverlay("🔥 5 in a row!", "Combo!");
+      } else if (ev.kind==="bigfile") {
+        personalOverlay("📦 Huge file!", `${(ev.size/1_000_000).toFixed(0)} MB`);
+      }
+    });
+
     // ---- Folder selection + scanning ----
     pickBtn?.addEventListener("click", async () => {
       try {
@@ -204,6 +216,22 @@
         console.error(err);
       }
     });
+
+    function personalOverlay(title, sub="") {
+      let o = document.getElementById("pFx");
+      if (!o) {
+        o = document.createElement("div");
+        o.id = "pFx";
+        o.className = "fx-overlay";
+        o.innerHTML = `<div class="fx-inner"><div class="fx-title"></div><div class="fx-sub"></div></div>`;
+        document.body.appendChild(o);
+      }
+      o.querySelector(".fx-title").textContent = title;
+      o.querySelector(".fx-sub").textContent = sub;
+      o.style.setProperty("--fx-color", "#18c1be");
+      o.classList.remove("hide"); o.classList.add("show");
+      setTimeout(()=>o.classList.add("hide"), 1600);
+    }
   </script>
 </body>
 </html>

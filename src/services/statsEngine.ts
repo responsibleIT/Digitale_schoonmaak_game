@@ -14,6 +14,21 @@ export interface UserStats {
   lastAt?: number;        // ms
   streak: number;         // aaneengesloten acties (<= 8s ertussen)
   actions: number[];      // timestamps (ms) voor tempo berekening
+
+  // NEW: Rate
+  ratePerMin: number;
+
+  // Milestone flags
+  _hitBytes100?: boolean;
+  _hitBytes500?: boolean;
+  _hitBytes1000?: boolean;
+  _hitBytes5000?: boolean;
+
+  _hitItems10?: boolean;
+  _hitItems25?: boolean;
+  _hitItems50?: boolean;
+  _hitItems100?: boolean;
+  _hitItems200?: boolean;
 }
 
 export interface LeaderRow {
@@ -57,7 +72,7 @@ export class StatsEngine {
     const m = this.getMap(sessionId);
     let s = m.get(userId);
     if (!s) {
-      s = { userId, displayName, items: 0, bytes: 0, streak: 0, actions: [] };
+      s = { userId, displayName, items: 0, bytes: 0, streak: 0, actions: [], ratePerMin: 0 };
       m.set(userId, s);
     } else if (displayName && s.displayName !== displayName) {
       s.displayName = displayName;
@@ -76,47 +91,146 @@ export class StatsEngine {
   ): Array<{ type: string; userId: string; displayName: string; payload?: any }> {
     const user = session.users.get(userId);
     const displayName = user?.displayName ?? "Speler";
-    const s = this.getUser(session.id, userId, displayName);
+    const s = this.getUser(session.id, userId, displayName); // ensure this returns a UserStats
     const now = Date.now();
 
-    // totals
-    s.items += 1;
-    s.bytes += size;
+    // --- Totals ---------------------------------------------------------------
+    s.items = (s.items ?? 0) + 1;
+    s.bytes = (s.bytes ?? 0) + size;
+
     if (!s.largestSize || size > s.largestSize) {
       s.largestSize = size;
       s.largestName = itemName;
     }
 
-    // streak (<= 8s tussen acties)
-    if (s.lastAt && now - s.lastAt <= 8000) s.streak += 1;
+    // --- Streak (<= 8s tussen acties) ----------------------------------------
+    if (s.lastAt && now - s.lastAt <= 8000) s.streak = (s.streak ?? 0) + 1;
     else s.streak = 1;
     s.lastAt = now;
 
-    // tempo
+    // --- Tempo (acties per minuut) -------------------------------------------
+    s.actions = s.actions ?? [];
     s.actions.push(now);
-    if (s.actions.length > 200) s.actions.splice(0, s.actions.length - 200);
+    // Houd lijst compact (en trim meteen tot de laatste 60s)
+    const cutoff = now - 60_000;
+    let keepFrom = 0;
+    // find first index within window
+    for (let i = s.actions.length - 1; i >= 0; i--) { if (s.actions[i] < cutoff) { keepFrom = i + 1; break; } }
+    if (keepFrom > 0) s.actions.splice(0, keepFrom);
+    s.ratePerMin = s.actions.length;     // actions/min; switch to bytes/min if you prefer
 
-    // milestones
-    const events: Array<{ type: string; userId: string; displayName: string; payload?: any }> = [];
+    // --- Events ---------------------------------------------------------------
+    const events: Array<{ type: string; userId: string; displayName: string; payload?: any } & any> = [];
+
+    // always emit a tiny “tick” for fun feedback
+    events.push({
+      kind: "tick",
+      type: "tick",
+      userId,
+      byName: displayName,
+      displayName,
+      payload: { size, itemName }
+    });
+
+    // first delete by this user
     if (s.items === 1) {
-      events.push({ type: "first-blood", userId, displayName, payload: { itemName, size }});
+      events.push({
+        kind: "first-blood",
+        type: "first-blood",
+        userId,
+        byName: displayName,
+        displayName,
+        payload: { itemName, size }
+      });
     }
-    if (s.streak === 3 || s.streak === 5 || s.streak === 8) {
-      events.push({ type: "streak", userId, displayName, payload: { streak: s.streak }});
+
+    // streak milestones
+    if (s.streak === 3 || s.streak === 5 || s.streak === 8 || s.streak === 10) {
+      events.push({
+        kind: `streak:${s.streak}`,
+        type: "streak",
+        userId,
+        byName: displayName,
+        displayName,
+        payload: { streak: s.streak }
+      });
     }
-    if (size >= 200 * 1024 * 1024) { // 200 MB+
-      events.push({ type: "chonk", userId, displayName, payload: { size, itemName }});
+
+    // big file (multiple tiers)
+    if (size >= 50 * 1024 * 1024) {
+      events.push({
+        kind: "bigfile",
+        type: "chonk",
+        userId,
+        byName: displayName,
+        displayName,
+        payload: { size, itemName }
+      });
     }
-    const mb = s.bytes / 1_000_000;
-    if ([100, 500, 1000, 5000].some(t => Math.abs(mb - t) < 5)) {
-      events.push({ type: "milestone-bytes", userId, displayName, payload: { totalMB: Math.round(mb) }});
-    }
-    if ([10, 25, 50, 100].includes(s.items)) {
-      events.push({ type: "milestone-items", userId, displayName, payload: { totalItems: s.items }});
-    }
+
+    // byte milestones (fire once each)
+    const MB = 1_000_000 as const;
+    type ByteFlag = "_hitBytes100" | "_hitBytes500" | "_hitBytes1000" | "_hitBytes5000";
+    type ItemFlag = "_hitItems10"  | "_hitItems25"  | "_hitItems50"   | "_hitItems100"  | "_hitItems200";
+
+    const markByteMilestone = (
+      s: UserStats,
+      flag: ByteFlag,
+      label: "100MB" | "500MB" | "1000MB" | "5000MB",
+      userId: string,
+      displayName: string,
+      bytes: number,
+      out: Array<{ type: string; userId: string; displayName: string; payload?: any } & any>
+    ) => {
+      if (!s[flag]) {
+        s[flag] = true;
+        out.push({
+          kind: `milestone:${label}`,
+          type: "milestone-bytes",
+          userId,
+          byName: displayName,
+          displayName,
+          payload: { totalMB: Math.round(bytes / MB) }
+        });
+      }
+    };
+
+    const markItemMilestone = (
+      s: UserStats,
+      flag: ItemFlag,
+      threshold: 10 | 25 | 50 | 100 | 200,
+      userId: string,
+      displayName: string,
+      out: Array<{ type: string; userId: string; displayName: string; payload?: any } & any>
+    ) => {
+      if (!s[flag]) {
+        s[flag] = true;
+        out.push({
+          kind: `milestone:items:${threshold}`,
+          type: "milestone-items",
+          userId,
+          byName: displayName,
+          displayName,
+          payload: { totalItems: s.items }
+        });
+      }
+    };
+
+    const bytes = s.bytes;
+    if (bytes >= 100 * MB)  markByteMilestone(s, "_hitBytes100",  "100MB",  userId, displayName, bytes, events);
+    if (bytes >= 500 * MB)  markByteMilestone(s, "_hitBytes500",  "500MB",  userId, displayName, bytes, events);
+    if (bytes >= 1_000 * MB)markByteMilestone(s, "_hitBytes1000","1000MB", userId, displayName, bytes, events);
+    if (bytes >= 5_000 * MB)markByteMilestone(s, "_hitBytes5000","5000MB", userId, displayName, bytes, events);
+
+    if (s.items >= 10)   markItemMilestone(s, "_hitItems10",  10,  userId, displayName, events);
+    if (s.items >= 25)   markItemMilestone(s, "_hitItems25",  25,  userId, displayName, events);
+    if (s.items >= 50)   markItemMilestone(s, "_hitItems50",  50,  userId, displayName, events);
+    if (s.items >= 100)  markItemMilestone(s, "_hitItems100", 100, userId, displayName, events);
+    if (s.items >= 200)  markItemMilestone(s, "_hitItems200", 200, userId, displayName, events);
 
     return events;
   }
+
 
   snapshot(session: { id: string; users: Map<string, { id: string; displayName: string }> }): StatsSnapshot {
     const m = this.getMap(session.id);
