@@ -79,5 +79,28 @@ export function registerClientSocket(
     } catch {}
   });
 
-  // … keep your other handlers (deletes, etc.)
+  // Player reports a deletion (local FS mode)
+  socket.on("client:deleted", ({ sessionId, userId, itemName, size }) => {
+    try {
+      const s = sessions.get(sessionId as any);
+      if (!s) return;
+
+      // Update stats
+      const events = (stats as any).applyDeletion
+        ? (stats as any).applyDeletion(s, userId, itemName || "item", Number(size) || 0)
+        : [];
+
+      const snapshot = (stats as any).snapshot ? (stats as any).snapshot(s) : null;
+
+      if (snapshot) {
+        io.to(`session:${sessionId}`).emit("stats", snapshot);
+      }
+      // Fun events (toasts/confetti) if your StatsEngine produces them
+      for (const ev of events) {
+        io.to(`session:${sessionId}`).emit("game:event", ev);
+      }
+    } catch (e: any) {
+      log.warn("[srv] client:deleted failed:", e.message);
+    }
+  });
 }

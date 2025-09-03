@@ -68,7 +68,12 @@
   function setSessionId(id){ sessionIdEl.textContent = id; sessionBox.classList.remove("hidden"); }
 
   startBtn?.addEventListener("click", () => socket.emit("host:start"));
-  beginBtn?.addEventListener("click", () => { if (sessionId) socket.emit("host:begin", { sessionId }); });
+  beginBtn?.addEventListener("click", () => {
+    if (sessionId) {
+      socket.emit("host:begin", { sessionId });
+      socket.emit("presence:request", { sessionId }); // optional
+    }
+  });
   endBtn?.addEventListener("click", () => sessionId && socket.emit("host:end", { sessionId }));
 
   socket.on("host:sessionId", (p) => {
@@ -99,8 +104,14 @@
     }
   });
 
-  socket.on("stats", (snap) => renderStats(snap));
-  socket.on("game:event", (ev) => showEvent(ev));
+  socket.on("stats", (snap) => {
+    // your existing renderStats(snap)
+    renderStats(snap);
+  });
+  socket.on("game:event", (ev) => {
+    // optional: the toast/confetti handler from earlier
+    showEvent(ev);
+  });
 
   function renderStats(snap) {
     // Podium (top 3)

@@ -181,9 +181,20 @@
       e.preventDefault();
       try {
         const data = JSON.parse(e.dataTransfer.getData("text/plain"));
+
+        // Local mode move to trash
         await softDeleteById(rootHandle, data.id, idToHandle, idToParent);
 
+        // REMOVE from UI
         filesDiv.querySelector(`[data-id="${data.id}"]`)?.remove();
+
+        // 👉 NEW: tell the server so the host can update stats/leaderboard
+        socket.emit("client:deleted", {
+          sessionId,
+          userId,
+          itemName: data.name,
+          size: Number(data.size) || 0
+        });
 
         // small flair
         const s = document.createElement("span"); s.className = "mini-pop"; document.body.appendChild(s);
