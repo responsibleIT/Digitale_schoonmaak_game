@@ -1,71 +1,168 @@
 <!doctype html>
-<html lang="nl">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Dashboardgame – Speler</title>
+  <title>Player</title>
   <link rel="stylesheet" href="/css/style.css" />
-  <script type="module" src="/js/google-init.js"></script>
 </head>
 <body>
   <main class="container">
-    <h1>Speler</h1>
+    <h1>Player</h1>
+
     <div class="card">
+      <!-- LOBBY -->
       <div id="lobby">
         <h2>Lobby</h2>
-        <p class="muted">Wachten tot de host het spel start…</p>
+        <p class="muted">Waiting for the host to start the game…</p>
         <ul id="lobbyUsers"></ul>
+
+        <!-- PRELOAD BOX: players MUST pick a folder first -->
+        <div id="preloadBox" class="lobby" style="margin-top:12px;">
+          <h3>Select your folder</h3>
+          <p class="muted">
+            Choose a local folder to clean. We’ll scan it <strong>locally</strong> (nothing is uploaded).
+            Use Chrome/Edge.
+          </p>
+          <div class="row gap">
+            <button id="pickFolder" class="primary">Choose folder</button>
+            <div id="loadStatus" class="muted"></div>
+          </div>
+          <div id="loadBarOuter" style="margin-top:8px; background:#eef2ff; border-radius:10px; height:10px; width:320px;">
+            <div id="loadBar" style="height:10px; width:0; background:linear-gradient(90deg,#6a5ae0,#8f85ff); border-radius:10px;"></div>
+          </div>
+        </div>
       </div>
 
+      <!-- GAME UI -->
       <div id="gameUI" class="hidden">
         <div class="row gap wrap">
-          <div class="muted">Sleep een bestand naar het monster om te verwijderen.</div>
-          <a href="/" class="secondary">Terug naar join</a>
+          <div class="muted">Drag a file onto the monster to move it to <code>.DashboardgameTrash</code>.</div>
+          <a href="/" class="secondary">Back to join</a>
         </div>
         <div id="files" class="file-grid"></div>
-        <div id="monster" class="monster" tabindex="0" title="Sleep hierheen">🧟‍♂️ Drop hier</div>
+        <div id="monster" class="monster" tabindex="0" title="Drop here">🧟‍♂️ Drop here</div>
       </div>
     </div>
   </main>
 
-  <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script>
-    // set once (or inject from server)
-    window.__GOOGLE_CLIENT_ID = "752962192093-r6fkli0tcuh8lbfgrn16fldnub4jvvem.apps.googleusercontent.com";
-  </script>
-
   <script type="module">
-    import { initGoogle, loginAndGetToken } from "/js/google-init.js";
-    import { apiListFiles, apiDelete, apiAttachToken } from "/js/api.js";
     import { socket, connectSocket } from "/js/socket.js";
     import { getQuery } from "/js/ui.js";
-
-    // --- Init Google on THIS page (important) ---
-    initGoogle(window.__GOOGLE_CLIENT_ID);
+    import { pickRoot, scanWithProgress, softDeleteById } from "/js/fs-local.js";
 
     const { sessionId, userId, displayName } = getQuery();
 
-    const lobby      = document.getElementById("lobby");
-    const lobbyUsers = document.getElementById("lobbyUsers");
-    const gameUI     = document.getElementById("gameUI");
-    const filesDiv   = document.getElementById("files");
-    const monster    = document.getElementById("monster");
+    // DOM
+    const lobby       = document.getElementById("lobby");
+    const lobbyUsers  = document.getElementById("lobbyUsers");
+    const preloadBox  = document.getElementById("preloadBox");
+    const loadStatus  = document.getElementById("loadStatus");
+    const loadBar     = document.getElementById("loadBar");
+    const gameUI      = document.getElementById("gameUI");
+    const filesDiv    = document.getElementById("files");
+    const monster     = document.getElementById("monster");
+    const pickBtn     = document.getElementById("pickFolder");
 
-    // Render first so it's in scope
-    function renderFiles(items) {
-      filesDiv.innerHTML = (items ?? []).map((f) => {
-        const canTrash = f.canTrash !== false; // default true if missing
-        const classes = ["file", !canTrash ? "disabled" : ""].join(" ").trim();
-        const title = canTrash ? "" : "You don’t have permission to trash this file";
-        return `
-          <div class="${classes}" ${canTrash ? 'draggable="true"' : ""} title="${title}"
-              data-id="${f.id}" data-name="${f.name}" data-size="${f.size}">
-            <div class="file-name">${f.name}</div>
-            <div class="file-size">${(Number(f.size)/1_000_000).toFixed(2)} MB</div>
-            ${!canTrash ? '<div class="lock">🔒</div>' : ''}
-          </div>
-        `;
+    // Local mode state
+    let rootHandle = null;
+    let idToHandle = new Map();
+    let idToParent = new Map();
+    let preloadedFiles = [];
+    let isReady = false;
+
+    // ---- Socket wiring ----
+    connectSocket();
+    const emitJoin = () => socket.emit("client:join", { sessionId, userId, displayName });
+    if (socket.connected) emitJoin(); else socket.once("connect", emitJoin);
+
+    socket.emit("presence:request", { sessionId });
+
+    socket.on("presence", ({ users, phase, allReady }) => {
+      // Render who’s ready/loading/not selected
+      lobbyUsers.innerHTML = (users ?? []).map(u => {
+        const st = u.status || {};
+        const state = st.ready ? "Ready"
+          : st.selected ? `${st.loadingPct ?? 0}% (${st.filesCount ?? 0})`
+          : "Not selected";
+        return `<li>${u.displayName} — ${state}</li>`;
       }).join("");
+
+      if (phase === "started") showGame();
+    });
+
+    socket.on("game:started", () => showGame());
+
+    // ---- Folder selection + scanning ----
+    pickBtn?.addEventListener("click", async () => {
+      try {
+        if (!("showDirectoryPicker" in window)) {
+          alert("Your browser does not support Local Folder access. Please use Chrome or Edge.");
+          return;
+        }
+
+        rootHandle = await pickRoot();
+        socket.emit("client:select", { sessionId, userId });
+
+        let processed = 0;
+        updateProgress(0, "Scanning…");
+
+        const { files, idToHandle: mapA, idToParentDir: mapB } =
+          await scanWithProgress(rootHandle, {
+            maxDepth: 10,
+            onProgress: ({ processed: p }) => {
+              processed = p;
+              // We don't know total; fake an easing bar to ~90%
+              const pct = Math.min(90, Math.round(Math.log10(2 + p) * 100 / 2));
+              updateProgress(pct, `Scanning… ${processed} files`);
+              socket.emit("client:loading", {
+                sessionId, userId,
+                loadingPct: pct, filesCount: processed
+              });
+            }
+          });
+
+        idToHandle = mapA;
+        idToParent = mapB;
+        preloadedFiles = files;
+        isReady = true;
+
+        updateProgress(100, `Ready (${files.length} files)`);
+        socket.emit("client:ready", { sessionId, userId, filesCount: files.length });
+        socket.emit("presence:request", { sessionId });
+      } catch (e) {
+        console.error(e);
+        alert("Folder selection cancelled or failed.");
+      }
+    });
+
+    function updateProgress(pct, text) {
+      if (loadBar) loadBar.style.width = pct + "%";
+      if (loadStatus) loadStatus.textContent = text || "";
+    }
+
+    // ---- Game rendering ----
+    function showGame() {
+      // Only proceed to game if the player actually scanned (isReady)
+      if (!isReady) {
+        // keep lobby visible; nudge user
+        updateProgress(0, "Please choose a folder first.");
+        return;
+      }
+      lobby?.classList.add("hidden");
+      preloadBox?.classList.add("hidden");
+      gameUI?.classList.remove("hidden");
+      renderFiles(preloadedFiles);
+    }
+
+    function renderFiles(items) {
+      filesDiv.innerHTML = (items ?? []).map((f) => `
+        <div class="file" draggable="true"
+             data-id="${f.id}" data-name="${f.name}" data-size="${f.size}">
+          <div class="file-name">${f.name}</div>
+          <div class="file-size">${(Number(f.size)/1_000_000).toFixed(2)} MB</div>
+        </div>
+      `).join("");
 
       filesDiv.querySelectorAll('.file[draggable="true"]').forEach((el) => {
         el.addEventListener("dragstart", (e) => {
@@ -78,79 +175,21 @@
       });
     }
 
-    async function startGame() {
-      if (!gameUI.classList.contains("hidden")) return;
-      lobby.classList.add("hidden");
-      gameUI.classList.remove("hidden");
-
-      try {
-        const res = await apiListFiles({ sessionId, userId });
-        renderFiles(res.files ?? []);
-      } catch (err) {
-        console.warn("[game] list failed, trying Google login", err);
-
-        // Prompt Google and attach token, then retry once
-        const token = await loginAndGetToken().catch(() => null);
-        if (token) {
-          await apiAttachToken({ sessionId, userId, accessToken: token });
-          const res2 = await apiListFiles({ sessionId, userId });
-          renderFiles(res2.files ?? []);
-        } else {
-          filesDiv.innerHTML = `<p class="error">Could not load files.</p>`;
-        }
-      }
-    }
-
-    // --- Socket wiring ---
-    connectSocket();
-
-    function emitJoin() {
-      const payload = { sessionId, userId, displayName };
-      console.log("[game] emitting client:join", payload);
-      socket.emit("client:join", payload);
-    }
-    if (socket.connected) emitJoin();
-    else socket.once("connect", () => { console.log("[game] connected"); emitJoin(); });
-
-    socket.emit("presence:request", { sessionId });
-
-    socket.on("presence", ({ users, phase }) => {
-      console.log("[game] presence", users, phase);
-      if (lobbyUsers) {
-        lobbyUsers.innerHTML = (users ?? []).map(u => `<li>${u.displayName}</li>`).join("");
-      }
-      if (phase === "started") startGame();
-    });
-
-    socket.on("game:started", () => startGame());
-    socket.on("client:joined", (p) => console.log("[game] client:joined ack", p));
-
-    // --- Drag to trash ---
+    // Drag → soft delete (move to .DashboardgameTrash)
     monster?.addEventListener("dragover", (e) => e.preventDefault());
-    monster.addEventListener("drop", async (e) => {
+    monster?.addEventListener("drop", async (e) => {
       e.preventDefault();
       try {
         const data = JSON.parse(e.dataTransfer.getData("text/plain"));
-        await apiDelete({ sessionId, userId, itemId: data.id, itemName: data.name, size: data.size });
-        const el = filesDiv.querySelector(`[data-id="${data.id}"]`);
-        if (el) {
-          el.classList.add("poof");
-          setTimeout(() => el.remove(), 300);
-        }
-        // kleine local confetti
-        (() => {
-          const s = document.createElement("span");
-          s.className = "mini-pop";
-          document.body.appendChild(s);
-          setTimeout(()=>s.remove(), 500);
-        })();
+        await softDeleteById(rootHandle, data.id, idToHandle, idToParent);
+
+        filesDiv.querySelector(`[data-id="${data.id}"]`)?.remove();
+
+        // small flair
+        const s = document.createElement("span"); s.className = "mini-pop"; document.body.appendChild(s);
+        setTimeout(() => s.remove(), 500);
       } catch (err) {
-        const msg = String(err?.message || "");
-        if (/permission|403/i.test(msg)) {
-          alert("You don’t have permission to trash this file (shared/read-only). Try another one.");
-        } else {
-          alert("Could not delete. Try again.");
-        }
+        alert("Could not delete. Try again.");
         console.error(err);
       }
     });

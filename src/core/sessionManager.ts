@@ -54,6 +54,22 @@ export class SessionManager {
     return s;
   }
 
+  setUserStatus(sessionId: string, userId: string, patch: Partial<User>) {
+    const s = this.sessions.get(sessionId);
+    if (!s) throw new Error("Session not found");
+    const u = s.users.get(userId);
+    if (!u) throw new Error("User not in session");
+    s.users.set(userId, { ...u, ...patch });
+    return s;
+  }
+  
+  allReady(sessionId: string) {
+    const s = this.sessions.get(sessionId);
+    if (!s) return false;
+    const users = Array.from(s.users.values());
+    return users.length > 0 && users.every(u => u.ready === true);
+  }
+
   /**
    * Verwijder een user uit de sessie. Verwijdert de sessie als leeg.
    */

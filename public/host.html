@@ -68,7 +68,7 @@
   function setSessionId(id){ sessionIdEl.textContent = id; sessionBox.classList.remove("hidden"); }
 
   startBtn?.addEventListener("click", () => socket.emit("host:start"));
-  beginBtn?.addEventListener("click", () => sessionId && socket.emit("host:begin", { sessionId }));
+  beginBtn?.addEventListener("click", () => { if (sessionId) socket.emit("host:begin", { sessionId }); });
   endBtn?.addEventListener("click", () => sessionId && socket.emit("host:end", { sessionId }));
 
   socket.on("host:sessionId", (p) => {
@@ -77,8 +77,26 @@
     socket.emit("presence:request", { sessionId });
   });
 
-  socket.on("presence", ({ users, phase }) => {
-    lobbyList.innerHTML = (users ?? []).map(u => `<li>${u.displayName}</li>`).join("");
+  let allReady = false;
+
+  socket.on("presence", ({ users, phase, allReady }) => {
+    const beginBtn = document.getElementById("begin");
+    if (beginBtn) {
+      beginBtn.disabled = !allReady;
+      beginBtn.style.opacity = allReady ? "1" : ".6";
+      beginBtn.title = allReady ? "" : "Waiting for all players to finish loading…";
+    }
+
+    const lobbyList = document.getElementById("hostLobbyUsers");
+    if (lobbyList) {
+      lobbyList.innerHTML = (users ?? []).map(u => {
+        const st = u.status || {};
+        const state = st.ready ? "✅ Ready"
+          : st.selected ? `⏳ ${st.loadingPct ?? 0}% (${st.filesCount ?? 0})`
+          : "⬜ Not selected";
+        return `<li>${u.displayName} — ${state}</li>`;
+      }).join("");
+    }
   });
 
   socket.on("stats", (snap) => renderStats(snap));

@@ -12,6 +12,11 @@ export interface User {
   totalBytesDeleted: number;
   totalItemsDeleted: number;
   largestItemDeleted?: { id: string; name: string; size: number };
+  mode?: "local" | "drive";
+  selected?: boolean;
+  loadingPct?: number;
+  filesCount?: number;
+  ready?: boolean;
 }
 
 // extend Session
